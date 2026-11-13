@@ -419,7 +419,7 @@ export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
                       : 'text-zinc-400 hover:text-zinc-200'
                   }`}
                 >
-                  <span>Liegen dem Spieler nicht</span>
+                  <span>Unsicher</span>
                   <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-red-950/80 text-red-300 font-mono font-bold">
                     {strugglingCount}
                   </span>

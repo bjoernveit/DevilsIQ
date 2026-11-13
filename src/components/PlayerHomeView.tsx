@@ -162,7 +162,7 @@ export const PlayerHomeView: React.FC<PlayerHomeViewProps> = ({
             className="w-full h-12 rounded-xl bg-red-700 hover:bg-red-600 active:scale-[0.99] text-white font-semibold text-sm flex items-center justify-center gap-2 transition-all"
           >
             <Play className="w-4 h-4 fill-current" />
-            <span>{hasCompleted ? 'Nochmal üben' : 'Quiz starten'}</span>
+            <span>Let's Go!</span>
           </button>
         ) : isCoach && onGoToCoachQuestions ? (
           <button

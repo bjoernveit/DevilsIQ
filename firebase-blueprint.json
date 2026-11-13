@@ -1,0 +1,229 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Public team member profile without PII (username-based identity).",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "username": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 32,
+          "pattern": "^[a-z0-9_.-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "role": {
+          "type": "string",
+          "enum": ["player", "coach"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "username", "displayName", "role", "createdAt", "updatedAt"]
+    },
+    "CoachRole": {
+      "title": "CoachRole",
+      "description": "Trusted coach role marker document.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "username": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 32
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "username", "createdAt"]
+    },
+    "Question": {
+      "title": "Question",
+      "description": "Tactical basketball playbook quiz question.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "scenario": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "keyConcept": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "isPriorityFocus": {
+          "type": "boolean"
+        },
+        "tags": {
+          "type": "array"
+        },
+        "explanation": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "options": {
+          "type": "array"
+        },
+        "diagram": {
+          "type": "object"
+        },
+        "imageUrl": {
+          "type": "string",
+          "maxLength": 500000
+        },
+        "createdBy": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "title", "scenario", "keyConcept", "isPriorityFocus", "tags", "explanation", "options", "createdBy", "createdAt", "updatedAt"]
+    },
+    "QuizAttempt": {
+      "title": "QuizAttempt",
+      "description": "Completed player quiz session and per-question answers.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "playerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "weekKey": {
+          "type": "string",
+          "maxLength": 16,
+          "pattern": "^[0-9]{4}-W[0-9]{2}$"
+        },
+        "totalScore": {
+          "type": "number"
+        },
+        "correctCount": {
+          "type": "number"
+        },
+        "totalQuestions": {
+          "type": "number"
+        },
+        "totalTimeSeconds": {
+          "type": "number"
+        },
+        "maxStreak": {
+          "type": "number"
+        },
+        "answers": {
+          "type": "array"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "playerId", "timestamp", "weekKey", "totalScore", "correctCount", "totalQuestions", "totalTimeSeconds", "maxStreak", "answers", "createdAt"]
+    },
+    "TeamMeta": {
+      "title": "TeamMeta",
+      "description": "Shared quiz configuration and initial coach bootstrap state.",
+      "type": "object",
+      "properties": {
+        "coachUid": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "questionCount": {
+          "type": "number"
+        },
+        "timePerQuestionSeconds": {
+          "type": "number"
+        },
+        "prioritizeFocusQuestions": {
+          "type": "boolean"
+        },
+        "ensureDiverseTopics": {
+          "type": "boolean"
+        },
+        "selectedTags": {
+          "type": "array"
+        },
+        "topicLabels": {
+          "type": "array"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Public roster profile for each registered player or coach."
+    },
+    "/coaches/{userId}": {
+      "schema": { "$ref": "#/entities/CoachRole" },
+      "description": "Trusted role lookup documents for coaches."
+    },
+    "/questions/{questionId}": {
+      "schema": { "$ref": "#/entities/Question" },
+      "description": "Shared tactical playbook quiz questions."
+    },
+    "/attempts/{attemptId}": {
+      "schema": { "$ref": "#/entities/QuizAttempt" },
+      "description": "Completed quiz attempts for leaderboard and coach analytics."
+    },
+    "/team_meta/{metaId}": {
+      "schema": { "$ref": "#/entities/TeamMeta" },
+      "description": "Team-wide quiz configuration (quiz_config) and bootstrap lock (bootstrap)."
+    }
+  }
+}

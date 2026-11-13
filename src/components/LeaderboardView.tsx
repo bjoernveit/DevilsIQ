@@ -9,6 +9,7 @@ interface LeaderboardViewProps {
   activeTeam?: Team | null;
   teams?: Team[];
   onSelectPlayerDetail?: (player: Player) => void;
+  viewerIsCoach?: boolean;
   embedded?: boolean;
 }
 
@@ -19,6 +20,7 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
   activeTeam = null,
   teams = [],
   onSelectPlayerDetail,
+  viewerIsCoach = false,
   embedded = false
 }) => {
   const [boardType, setBoardType] = useState<'weekly' | 'alltime'>('weekly');
@@ -177,19 +179,14 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
         ) : (
           filteredLeaderboard.map((item, index) => {
             const isMe = item.player.id === currentPlayerId;
+            const canViewDetail = viewerIsCoach || isMe;
             const rank = index + 1;
             const playerTeams = !isTeamScoped
               ? teams.filter(t => t.playerIds.includes(item.player.id)).map(t => t.name)
               : [];
 
-            return (
-              <button
-                key={item.player.id}
-                onClick={() => onSelectPlayerDetail?.(item.player)}
-                className={`w-full flex items-center justify-between px-4 py-3.5 text-left transition-colors hover:bg-zinc-800/60 min-h-[60px] ${
-                  isMe ? 'bg-red-950/35' : ''
-                }`}
-              >
+            const rowContent = (
+              <>
                 <div className="flex items-center gap-3 min-w-0">
                   <span className="w-5 text-xs font-mono font-semibold text-zinc-500 tabular-nums shrink-0">
                     {rank}
@@ -210,14 +207,39 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
                 <div className="flex items-center gap-4 shrink-0 text-right">
                   <div>
                     <div className="text-sm font-bold font-mono tabular-nums text-white">
-                      {item.bestScoreThisWeek > 0 ? `${item.bestScoreThisWeek}s` : '—'}
+                      {item.bestScoreThisWeek > 0 ? `${item.bestScoreThisWeek.toFixed(1)}s` : '—'}
                     </div>
                     <div className="text-[11px] text-zinc-400 font-mono tabular-nums">
                       {item.bestScoreThisWeek > 0 ? 'Bestzeit' : 'Offen'}
                     </div>
                   </div>
                 </div>
-              </button>
+              </>
+            );
+
+            if (canViewDetail && onSelectPlayerDetail) {
+              return (
+                <button
+                  key={item.player.id}
+                  onClick={() => onSelectPlayerDetail(item.player)}
+                  className={`w-full flex items-center justify-between px-4 py-3.5 text-left transition-colors hover:bg-zinc-800/60 min-h-[60px] cursor-pointer ${
+                    isMe ? 'bg-red-950/35' : ''
+                  }`}
+                >
+                  {rowContent}
+                </button>
+              );
+            }
+
+            return (
+              <div
+                key={item.player.id}
+                className={`w-full flex items-center justify-between px-4 py-3.5 text-left min-h-[60px] ${
+                  isMe ? 'bg-red-950/35' : ''
+                }`}
+              >
+                {rowContent}
+              </div>
             );
           })
         )}

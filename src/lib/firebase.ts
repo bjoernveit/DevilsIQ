@@ -550,19 +550,28 @@ export async function saveAttemptToFirestore(attempt: QuizAttempt): Promise<void
   const attemptId = sanitizeId(attempt.id);
   const path = `attempts/${attemptId}`;
 
+  const cleanAnswers = attempt.answers.slice(0, 30).map(a => ({
+    ...a,
+    timeSpentSeconds: Math.max(0.1, Math.round((a.timeSpentSeconds || 0) * 10) / 10)
+  }));
+
   const payload: Record<string, unknown> = {
     id: attemptId,
     playerId: attempt.playerId,
     timestamp: attempt.timestamp.slice(0, 64),
     weekKey: attempt.weekKey.slice(0, 16),
-    totalScore: Math.max(0, Math.min(10000, Math.round(attempt.totalScore))),
+    totalScore: Math.max(0, Math.min(10000, Math.round(attempt.totalScore * 10) / 10)),
     correctCount: Math.max(0, Math.min(30, Math.round(attempt.correctCount))),
     totalQuestions: Math.max(1, Math.min(30, Math.round(attempt.totalQuestions))),
-    totalTimeSeconds: Math.max(0, Math.min(3600, Math.round(attempt.totalTimeSeconds))),
+    totalTimeSeconds: Math.max(0, Math.min(3600, Math.round(attempt.totalTimeSeconds * 10) / 10)),
     maxStreak: Math.max(0, Math.min(30, Math.round(attempt.maxStreak))),
-    answers: stripUndefined(attempt.answers.slice(0, 30)),
+    answers: stripUndefined(cleanAnswers),
     createdAt: serverTimestamp()
   };
+
+  if (attempt.passed !== undefined) {
+    payload.passed = Boolean(attempt.passed);
+  }
 
   if (attempt.teamId) {
     payload.teamId = sanitizeId(attempt.teamId);

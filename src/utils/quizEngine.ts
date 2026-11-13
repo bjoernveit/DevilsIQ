@@ -282,9 +282,9 @@ export function calculateWeeklyLeaderboard(
     let bestScoreThisWeek = 0;
     let averageTimeThisWeek = 0;
     if (passedAttempts.length > 0) {
-      bestScoreThisWeek = Math.min(...passedAttempts.map(a => a.totalTimeSeconds));
+      bestScoreThisWeek = Math.round(Math.min(...passedAttempts.map(a => a.totalTimeSeconds)) * 10) / 10;
       const totalPassedTime = passedAttempts.reduce((sum, a) => sum + a.totalTimeSeconds, 0);
-      averageTimeThisWeek = Math.round(totalPassedTime / passedAttempts.length);
+      averageTimeThisWeek = Math.round((totalPassedTime / passedAttempts.length) * 10) / 10;
     }
 
     let totalPointsThisWeek = 0;
@@ -351,9 +351,9 @@ export function calculateAllTimeLeaderboard(
     let bestScoreThisWeek = 0;
     let averageTimeThisWeek = 0;
     if (passedAttempts.length > 0) {
-      bestScoreThisWeek = Math.min(...passedAttempts.map(a => a.totalTimeSeconds));
+      bestScoreThisWeek = Math.round(Math.min(...passedAttempts.map(a => a.totalTimeSeconds)) * 10) / 10;
       const totalPassedTime = passedAttempts.reduce((sum, a) => sum + a.totalTimeSeconds, 0);
-      averageTimeThisWeek = Math.round(totalPassedTime / passedAttempts.length);
+      averageTimeThisWeek = Math.round((totalPassedTime / passedAttempts.length) * 10) / 10;
     }
 
     let totalPointsThisWeek = 0;
@@ -436,7 +436,7 @@ export function calculateWeeklyTrends(
       0
     );
     const averageScore = passedAttempts.length > 0
-      ? Math.round(totalPassedTime / passedAttempts.length)
+      ? Math.round((totalPassedTime / passedAttempts.length) * 10) / 10
       : 0;
 
     const totalQuestions = weekAttempts.reduce((sum, a) => sum + a.totalQuestions, 0);
@@ -449,5 +449,13 @@ export function calculateWeeklyTrends(
       averageAccuracy: totalQuestions > 0 ? Math.round((totalCorrect / totalQuestions) * 100) : 0
     };
   });
+}
+
+/**
+ * Formats a time in seconds to exactly one decimal place (e.g. 14.2s, 0.8s).
+ */
+export function formatSeconds(seconds: number | undefined | null): string {
+  if (seconds === undefined || seconds === null || isNaN(seconds) || seconds <= 0) return '—';
+  return `${seconds.toFixed(1)}s`;
 }
 

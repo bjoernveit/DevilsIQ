@@ -74,18 +74,19 @@ service cloud.firestore {
 
     function isValidAttempt(data, attemptId) {
       return data.keys().hasAll(['id', 'playerId', 'timestamp', 'weekKey', 'totalScore', 'correctCount', 'totalQuestions', 'totalTimeSeconds', 'maxStreak', 'answers', 'createdAt'])
-        && data.keys().hasOnly(['id', 'playerId', 'timestamp', 'weekKey', 'totalScore', 'correctCount', 'totalQuestions', 'totalTimeSeconds', 'maxStreak', 'answers', 'teamId', 'createdAt'])
+        && data.keys().hasOnly(['id', 'playerId', 'timestamp', 'weekKey', 'totalScore', 'correctCount', 'totalQuestions', 'totalTimeSeconds', 'maxStreak', 'answers', 'teamId', 'createdAt', 'passed'])
         && data.id is string && data.id == attemptId && data.id.size() <= 128
         && data.playerId is string && data.playerId == request.auth.uid && data.playerId.size() <= 128
         && data.timestamp is string && data.timestamp.size() <= 64
         && data.weekKey is string && data.weekKey.size() <= 16 && data.weekKey.matches('^[0-9]{4}-W[0-9]{2}$')
-        && data.totalScore is int && data.totalScore >= 0 && data.totalScore <= 10000
+        && data.totalScore is number && data.totalScore >= 0 && data.totalScore <= 10000
         && data.correctCount is int && data.correctCount >= 0 && data.correctCount <= 30
         && data.totalQuestions is int && data.totalQuestions >= 1 && data.totalQuestions <= 30
-        && data.totalTimeSeconds is int && data.totalTimeSeconds >= 0 && data.totalTimeSeconds <= 3600
+        && data.totalTimeSeconds is number && data.totalTimeSeconds >= 0 && data.totalTimeSeconds <= 3600
         && data.maxStreak is int && data.maxStreak >= 0 && data.maxStreak <= 30
         && data.answers is list && data.answers.size() <= 30
         && (!('teamId' in data) || (data.teamId is string && data.teamId.size() >= 1 && data.teamId.size() <= 128 && data.teamId.matches('^[a-zA-Z0-9_\\-]+$')))
+        && (!('passed' in data) || data.passed is bool)
         && data.createdAt is timestamp;
     }
 

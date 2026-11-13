@@ -30,6 +30,7 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startTimeRef = useRef<number>(Date.now());
+  const questionStartTimeRef = useRef<number>(Date.now());
   const transitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const currentQuestion = questions[currentIndex];
@@ -49,28 +50,28 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
   }, []);
 
   useEffect(() => {
+    questionStartTimeRef.current = Date.now();
+    setTimeRemaining(timePerQuestion);
+
     if (hasSubmittedAnswer) {
       if (timerRef.current) clearInterval(timerRef.current);
       return;
     }
 
-    setTimeRemaining(timePerQuestion);
-
     timerRef.current = setInterval(() => {
-      setTimeRemaining(prev => {
-        if (prev <= 1) {
-          if (timerRef.current) clearInterval(timerRef.current);
-          handleTimeExpired();
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
+      const elapsedOnQuestion = (Date.now() - questionStartTimeRef.current) / 1000;
+      const remaining = Math.max(0, Math.round((timePerQuestion - elapsedOnQuestion) * 10) / 10);
+      setTimeRemaining(remaining);
+      if (remaining <= 0) {
+        if (timerRef.current) clearInterval(timerRef.current);
+        handleTimeExpired();
+      }
+    }, 100);
 
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [currentIndex, hasSubmittedAnswer]);
+  }, [currentIndex, hasSubmittedAnswer, timePerQuestion]);
 
   // Unmount cleanup for transition timer
   useEffect(() => {
@@ -80,7 +81,7 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
   }, []);
 
   const finishSession = (answers: QuizAttemptAnswer[], passed: boolean) => {
-    const totalTime = Math.max(1, Math.round((Date.now() - startTimeRef.current) / 1000));
+    const totalTime = Math.max(0.1, Math.round((Date.now() - startTimeRef.current) / 100) / 10);
     const correctCount = answers.filter(a => a.isCorrect).length;
 
     onFinishQuiz({
@@ -125,7 +126,8 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
     if (timerRef.current) clearInterval(timerRef.current);
 
     setSelectedOptionId(option.id);
-    const timeSpent = Math.max(1, timePerQuestion - timeRemaining);
+    const elapsedOnQuestion = (Date.now() - questionStartTimeRef.current) / 1000;
+    const timeSpent = Math.max(0.1, Math.min(timePerQuestion, Math.round(elapsedOnQuestion * 10) / 10));
     const isCorrect = option.isCorrect;
 
     let points = 0;
@@ -185,8 +187,6 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
             <span className="font-mono font-semibold text-white">
               Frage {currentIndex + 1} von {questions.length}
             </span>
-            <span aria-hidden="true">·</span>
-            <span className="text-red-400 font-medium">Kein Fehler erlaubt</span>
           </div>
 
           <div className="flex items-center gap-3">
@@ -198,7 +198,7 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
               }`}
             >
               <Timer className="w-3.5 h-3.5" />
-              {timeRemaining}s
+              {timeRemaining.toFixed(1)}s
             </span>
 
             <button
@@ -254,8 +254,7 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
 
         {/* Answer Options (Text and/or Image) */}
         <div className={hasVisualOptions ? 'grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1' : 'space-y-2.5 pt-1'}>
-          {shuffledOptions.map((opt, idx) => {
-            const letter = String.fromCharCode(65 + idx);
+          {shuffledOptions.map(opt => {
             const isSelected = selectedOptionId === opt.id;
             const isCorrect = opt.isCorrect;
 
@@ -277,19 +276,7 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
                 onClick={() => handleSelectOption(opt)}
                 className={`w-full text-left p-3.5 rounded-xl border transition-colors flex flex-col gap-2.5 min-h-[52px] ${cardStyle}`}
               >
-                <div className="flex items-start gap-3 w-full">
-                  <span
-                    className={`w-6 h-6 rounded-md font-mono font-semibold text-xs flex items-center justify-center shrink-0 mt-0.5 ${
-                      hasSubmittedAnswer && isCorrect
-                        ? 'bg-emerald-600 text-white'
-                        : hasSubmittedAnswer && isSelected
-                        ? 'bg-red-600 text-white'
-                        : 'bg-zinc-800 text-zinc-300'
-                    }`}
-                  >
-                    {letter}
-                  </span>
-
+                <div className="flex items-start justify-between gap-3 w-full">
                   <span className="flex-1 text-sm font-medium leading-snug">
                     {opt.text}
                   </span>

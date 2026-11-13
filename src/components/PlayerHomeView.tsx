@@ -126,11 +126,11 @@ export const PlayerHomeView: React.FC<PlayerHomeViewProps> = ({
           {hasCompleted && (
             <div className="text-right">
               <p className="text-lg font-bold font-mono tabular-nums text-white">
-                {bestScore > 0 ? `${bestScore}s` : '—'}
+                {bestScore > 0 ? `${bestScore.toFixed(1)}s` : '—'}
               </p>
               <p className="text-[11px] text-zinc-400">
                 {mySummary?.averageTimeThisWeek && mySummary.averageTimeThisWeek > 0 && mySummary.averageTimeThisWeek !== bestScore
-                  ? `Bestzeit (Ø ${mySummary.averageTimeThisWeek}s)`
+                  ? `Bestzeit (Ø ${mySummary.averageTimeThisWeek.toFixed(1)}s)`
                   : 'Bestzeit'}
               </p>
             </div>
@@ -186,6 +186,7 @@ export const PlayerHomeView: React.FC<PlayerHomeViewProps> = ({
         activeTeam={activeTeam}
         teams={teams}
         onSelectPlayerDetail={onSelectPlayerDetail}
+        viewerIsCoach={isCoach}
         embedded
       />
     </div>

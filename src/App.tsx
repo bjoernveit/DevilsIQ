@@ -65,6 +65,7 @@ export default function App() {
   const [coachSelectedTeamId, setCoachSelectedTeamId] = useState<string | null>(null);
   const [coachAnalyticsTeamFilter, setCoachAnalyticsTeamFilter] = useState<string>('all');
   const [coachQuestionsTeamFilter, setCoachQuestionsTeamFilter] = useState<string>('all');
+  const [coachQuestionsPlayerFilter, setCoachQuestionsPlayerFilter] = useState<string>('all');
 
   const [isQuizActive, setIsQuizActive] = useState<boolean>(false);
   const [activeQuizQuestions, setActiveQuizQuestions] = useState<Question[]>([]);
@@ -435,6 +436,9 @@ export default function App() {
   };
 
   const handleSelectPlayerDetail = (player: Player) => {
+    if (!isCoach && player.id !== currentPlayer.id) {
+      return;
+    }
     setSelectedPlayerForDetail(player);
     setIsPlayerDetailOpen(true);
   };
@@ -644,8 +648,12 @@ export default function App() {
               <QuestionBankView
                 questions={questions}
                 teams={teams}
+                players={players}
+                attempts={attempts}
                 selectedTeamFilter={coachQuestionsTeamFilter}
                 onChangeTeamFilter={setCoachQuestionsTeamFilter}
+                selectedPlayerFilter={coachQuestionsPlayerFilter}
+                onChangePlayerFilter={setCoachQuestionsPlayerFilter}
                 topicLabels={allKnownTags}
                 onAddQuestion={() => {
                   setEditingQuestion(null);
@@ -735,6 +743,13 @@ export default function App() {
         currentUserId={currentPlayer.id}
         onToggleRole={handleToggleMemberRole}
         onDeletePlayer={handleDeletePlayer}
+        onTogglePriorityFocus={handleTogglePriorityFocus}
+        onSwitchToQuestions={playerId => {
+          setIsPlayerDetailOpen(false);
+          setCoachQuestionsPlayerFilter(playerId);
+          setActiveTab('coach');
+          setCoachSubTab('questions');
+        }}
       />
 
       <QuizResultsModal

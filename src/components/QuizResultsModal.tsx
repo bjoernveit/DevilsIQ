@@ -45,11 +45,11 @@ export const QuizResultsModal: React.FC<QuizResultsModalProps> = ({
               {player.name} · {passed ? 'Quiz erfolgreich bestanden! 🎉' : 'Quiz fehlgeschlagen ❌'}
             </p>
             <h2 className="text-3xl font-bold font-mono tabular-nums text-white mt-1">
-              {attempt.totalTimeSeconds}s
+              {attempt.totalTimeSeconds.toFixed(1)}s
             </h2>
             <p className="text-xs text-zinc-400 mt-1">
               {passed
-                ? `Alle ${attempt.totalQuestions} Fragen fehlerfrei gelöst (${attempt.totalTimeSeconds} Sekunden)`
+                ? `Alle ${attempt.totalQuestions} Fragen fehlerfrei gelöst (${attempt.totalTimeSeconds.toFixed(1)} Sekunden)`
                 : `Fehler bei Frage ${attempt.correctCount + 1}. Ziel: ${attempt.totalQuestions} Fragen ohne Fehler.`}
             </p>
           </div>
@@ -80,7 +80,7 @@ export const QuizResultsModal: React.FC<QuizResultsModalProps> = ({
                     </span>
                   </div>
                   <span className="font-mono text-zinc-400 shrink-0 tabular-nums">
-                    {ans.timeSpentSeconds}s
+                    {ans.timeSpentSeconds.toFixed(1)}s
                   </span>
                 </div>
 

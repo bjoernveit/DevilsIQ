@@ -1,12 +1,16 @@
-import React, { useState } from 'react';
-import { Question, Team } from '../types/basketball';
-import { Plus, Search, Star, Trash2, Edit3, X, Copy } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import { Question, Team, Player, QuizAttempt } from '../types/basketball';
+import { Plus, Search, Star, Trash2, Edit3, X, Copy, ArrowUpDown, User } from 'lucide-react';
 
 interface QuestionBankViewProps {
   questions: Question[];
   teams: Team[];
+  players?: Player[];
+  attempts?: QuizAttempt[];
   selectedTeamFilter: string;
   onChangeTeamFilter: (teamFilter: string) => void;
+  selectedPlayerFilter?: string;
+  onChangePlayerFilter?: (playerId: string) => void;
   topicLabels: string[];
   onAddQuestion: () => void;
   onEditQuestion: (question: Question) => void;
@@ -19,8 +23,12 @@ interface QuestionBankViewProps {
 export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
   questions,
   teams,
+  players = [],
+  attempts = [],
   selectedTeamFilter,
   onChangeTeamFilter,
+  selectedPlayerFilter = 'all',
+  onChangePlayerFilter,
   topicLabels,
   onAddQuestion,
   onEditQuestion,
@@ -32,35 +40,97 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTag, setSelectedTag] = useState<string>('All');
   const [onlyFocus, setOnlyFocus] = useState<boolean>(false);
+  const [sortOrder, setSortOrder] = useState<'default' | 'lowest_accuracy' | 'highest_accuracy' | 'most_answered'>('default');
   const [isEditingLabels, setIsEditingLabels] = useState<boolean>(false);
   const [removingTag, setRemovingTag] = useState<string | null>(null);
 
   const allTags = Array.from(new Set([...topicLabels, ...questions.flatMap(q => q.tags)])).sort();
-
   const teamNameById = new Map(teams.map(t => [t.id, t.name]));
+  const selectedPlayer = players.find(p => p.id === selectedPlayerFilter);
 
-  const filteredQuestions = questions.filter(q => {
-    const matchesSearch =
-      q.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      q.scenario.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      q.tags.some(t => t.toLowerCase().includes(searchQuery.toLowerCase()));
+  // Compute accuracy statistics per question (filtered by player and/or team if selected)
+  const questionStatsMap = useMemo(() => {
+    const relevantAttempts = attempts.filter(att => {
+      if (selectedPlayerFilter && selectedPlayerFilter !== 'all' && att.playerId !== selectedPlayerFilter) {
+        return false;
+      }
+      if (selectedTeamFilter && selectedTeamFilter !== 'all' && selectedTeamFilter !== 'global') {
+        if (att.teamId && att.teamId !== selectedTeamFilter) return false;
+      }
+      return true;
+    });
 
-    if (!matchesSearch) return false;
-    if (selectedTag !== 'All' && !q.tags.includes(selectedTag)) return false;
-    if (onlyFocus && !q.isPriorityFocus) return false;
-
-    const isGlobal = !q.teamIds || q.teamIds.length === 0;
-    if (selectedTeamFilter === 'global' && !isGlobal) return false;
-    if (
-      selectedTeamFilter !== 'all' &&
-      selectedTeamFilter !== 'global' &&
-      !(isGlobal || q.teamIds?.includes(selectedTeamFilter))
-    ) {
-      return false;
+    const map = new Map<string, { total: number; correct: number; wrong: number; accuracy: number }>();
+    for (const att of relevantAttempts) {
+      for (const ans of att.answers) {
+        const cur = map.get(ans.questionId) || { total: 0, correct: 0, wrong: 0, accuracy: 0 };
+        cur.total += 1;
+        if (ans.isCorrect) {
+          cur.correct += 1;
+        } else {
+          cur.wrong += 1;
+        }
+        map.set(ans.questionId, cur);
+      }
     }
+    for (const cur of map.values()) {
+      cur.accuracy = cur.total > 0 ? Math.round((cur.correct / cur.total) * 100) : 0;
+    }
+    return map;
+  }, [attempts, selectedPlayerFilter, selectedTeamFilter]);
 
-    return true;
-  });
+  const filteredQuestions = useMemo(() => {
+    const list = questions.filter(q => {
+      const matchesSearch =
+        q.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        q.scenario.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        q.tags.some(t => t.toLowerCase().includes(searchQuery.toLowerCase()));
+
+      if (!matchesSearch) return false;
+      if (selectedTag !== 'All' && !q.tags.includes(selectedTag)) return false;
+      if (onlyFocus && !q.isPriorityFocus) return false;
+
+      const isGlobal = !q.teamIds || q.teamIds.length === 0;
+      if (selectedTeamFilter === 'global' && !isGlobal) return false;
+      if (
+        selectedTeamFilter !== 'all' &&
+        selectedTeamFilter !== 'global' &&
+        !(isGlobal || q.teamIds?.includes(selectedTeamFilter))
+      ) {
+        return false;
+      }
+
+      return true;
+    });
+
+    // Apply sorting
+    return list.sort((a, b) => {
+      const statA = questionStatsMap.get(a.id);
+      const statB = questionStatsMap.get(b.id);
+      const totalA = statA?.total || 0;
+      const totalB = statB?.total || 0;
+      const accA = statA ? statA.accuracy : -1;
+      const accB = statB ? statB.accuracy : -1;
+
+      if (sortOrder === 'lowest_accuracy') {
+        // Show questions that have answers and lowest accuracy first
+        if (totalA > 0 && totalB === 0) return -1;
+        if (totalA === 0 && totalB > 0) return 1;
+        if (accA !== accB) return accA - accB;
+        return (statB?.wrong || 0) - (statA?.wrong || 0);
+      }
+      if (sortOrder === 'highest_accuracy') {
+        if (totalA > 0 && totalB === 0) return -1;
+        if (totalA === 0 && totalB > 0) return 1;
+        return accB - accA;
+      }
+      if (sortOrder === 'most_answered') {
+        return totalB - totalA;
+      }
+      // default: creation date descending
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    });
+  }, [questions, searchQuery, selectedTag, onlyFocus, selectedTeamFilter, sortOrder, questionStatsMap]);
 
   const priorityCount = questions.filter(q => q.isPriorityFocus).length;
 
@@ -156,6 +226,47 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
         </div>
       )}
 
+      {/* Player and Sort Bar */}
+      <div className="flex flex-wrap items-center justify-between gap-2.5 p-3 rounded-xl bg-zinc-900/60 border border-zinc-800/80">
+        {players && players.length > 0 && onChangePlayerFilter && (
+          <div className="flex items-center gap-1.5 text-xs">
+            <span className="text-zinc-400 font-medium flex items-center gap-1">
+              <User className="w-3.5 h-3.5 text-zinc-500" />
+              Quote für Spieler:
+            </span>
+            <select
+              value={selectedPlayerFilter || 'all'}
+              onChange={e => onChangePlayerFilter(e.target.value)}
+              className="bg-zinc-950 border border-zinc-700 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-red-600 min-h-[32px]"
+            >
+              <option value="all">Alle Spieler (Gesamt-Quote)</option>
+              {players.map(p => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        <div className="flex items-center gap-1.5 text-xs ml-auto">
+          <span className="text-zinc-400 font-medium flex items-center gap-1">
+            <ArrowUpDown className="w-3.5 h-3.5 text-zinc-500" />
+            Sortierung:
+          </span>
+          <select
+            value={sortOrder}
+            onChange={e => setSortOrder(e.target.value as any)}
+            className="bg-zinc-950 border border-zinc-700 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-red-600 min-h-[32px]"
+          >
+            <option value="default">Neueste zuerst</option>
+            <option value="lowest_accuracy">Niedrigste Quote (Problem-Fragen)</option>
+            <option value="highest_accuracy">Höchste Quote</option>
+            <option value="most_answered">Meiste Antworten</option>
+          </select>
+        </div>
+      </div>
+
       {/* Topic Filter Row */}
       <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
         <button
@@ -175,7 +286,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
             className={`inline-flex items-center rounded-lg border text-xs whitespace-nowrap transition-colors min-h-[34px] ${
               selectedTag === tag
                 ? 'bg-red-700 border-red-700 text-white font-medium'
-                : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:bg-zinc-800'
+                : 'bg-zinc-900 border border-zinc-800 text-zinc-300 hover:bg-zinc-800'
             }`}
           >
             <button
@@ -233,13 +344,14 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
               .map(id => teamNameById.get(id))
               .filter((name): name is string => Boolean(name));
             const teamLabel = validTeamNames.length > 0 ? validTeamNames.join(', ') : 'Alle Teams';
+            const qStats = questionStatsMap.get(q.id);
 
             return (
               <div
                 key={q.id}
                 className="p-4 flex items-start justify-between gap-3 hover:bg-zinc-800/40 transition-colors"
               >
-                <div className="min-w-0 flex-1 space-y-1">
+                <div className="min-w-0 flex-1 space-y-1.5">
                   <div className="text-xs text-zinc-400 flex items-center gap-1.5 flex-wrap">
                     <span className={validTeamNames.length > 0 ? 'text-red-300 font-medium' : 'text-zinc-300'}>
                       {teamLabel}
@@ -253,6 +365,26 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                           {hasOptionImages ? 'Bild-Antworten' : 'Mit Bild'}
                         </span>
                       </>
+                    )}
+                    <span aria-hidden="true">·</span>
+                    {qStats && qStats.total > 0 ? (
+                      <span
+                        className={`inline-flex items-center gap-1 font-mono font-semibold px-2 py-0.5 rounded-md text-[11px] ${
+                          qStats.accuracy >= 75
+                            ? 'bg-emerald-950/70 border border-emerald-800/60 text-emerald-300'
+                            : qStats.accuracy >= 50
+                            ? 'bg-amber-950/70 border border-amber-800/60 text-amber-300'
+                            : 'bg-red-950/80 border border-red-800 text-red-200'
+                        }`}
+                        title={`${qStats.correct} von ${qStats.total} Antworten richtig`}
+                      >
+                        {qStats.accuracy}% Quote ({qStats.correct}/{qStats.total})
+                        {selectedPlayer && ` · ${selectedPlayer.name}`}
+                      </span>
+                    ) : (
+                      <span className="text-[11px] text-zinc-500 font-mono">
+                        Noch keine Antworten
+                      </span>
                     )}
                   </div>
 

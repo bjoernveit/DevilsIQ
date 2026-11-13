@@ -84,7 +84,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess }) => {
     setPassword('');
     setIsRegisterMode(false);
     if (typeof window !== 'undefined' && window.location.search.includes('register=')) {
-      window.history.replaceState({}, '', '/');
+      window.history.replaceState({}, '', window.location.pathname);
     }
   };
 
@@ -94,7 +94,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess }) => {
         <div className="flex flex-col items-center text-center space-y-3">
           <div className="w-20 h-20 rounded-2xl bg-black border border-zinc-800 p-1.5 flex items-center justify-center">
             <img
-              src="/assets/aistudio/logodevils_7cf5d62a.jpg"
+              src={`${import.meta.env.BASE_URL}assets/aistudio/logodevils_7cf5d62a.jpg`}
               alt="DTV Devils Logo"
               referrerPolicy="no-referrer"
               className="w-full h-full object-contain"

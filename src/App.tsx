@@ -317,7 +317,7 @@ export default function App() {
           className="flex items-center gap-2.5 text-base font-bold tracking-tight text-white whitespace-nowrap shrink-0"
         >
           <img
-            src="/assets/aistudio/logodevils_7cf5d62a.jpg"
+            src={`${import.meta.env.BASE_URL}assets/aistudio/logodevils_7cf5d62a.jpg`}
             alt="Devils Logo"
             referrerPolicy="no-referrer"
             className="w-7 h-7 rounded-md object-contain bg-black"

@@ -110,8 +110,10 @@ export function isRegistrationRoute(): boolean {
 }
 
 export function getRegistrationUrl(): string {
-  if (typeof window === 'undefined') return `/?register=${REGISTRATION_TOKEN}`;
-  return `${window.location.origin}/?register=${REGISTRATION_TOKEN}`;
+  const base = import.meta.env.BASE_URL || '/';
+  const normalizedBase = base.endsWith('/') ? base : `${base}/`;
+  if (typeof window === 'undefined') return `${normalizedBase}?register=${REGISTRATION_TOKEN}`;
+  return `${window.location.origin}${normalizedBase}?register=${REGISTRATION_TOKEN}`;
 }
 
 // Username <-> Internal Email mapping (no email UI required)

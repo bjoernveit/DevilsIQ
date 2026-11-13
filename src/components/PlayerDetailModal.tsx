@@ -127,7 +127,7 @@ export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
       if (!q) return;
       const accuracy = stat.total > 0 ? Math.round((stat.correct / stat.total) * 100) : 0;
       // Considered struggling if accuracy < 75% or has at least 1 wrong answer
-      const isStruggling = accuracy < 75 || stat.wrong > 0;
+      const isStruggling = accuracy < 90;
       list.push({
         question: q,
         total: stat.total,

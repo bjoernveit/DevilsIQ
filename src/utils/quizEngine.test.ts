@@ -6,6 +6,7 @@ import {
   calculateQuestionScore,
   calculateTacticalGaps,
   calculateWeeklyLeaderboard,
+  calculateAllTimeLeaderboard,
   calculateWeeklyTrends,
   filterQuestionsForTeam,
   getTeamQuizConfig
@@ -167,11 +168,12 @@ test('calculateWeeklyLeaderboard accurately tracks completion and ranks players'
       timestamp: '2026-11-02T10:00:00Z',
       weekKey: '2026-W45',
       totalScore: 450,
-      correctCount: 4,
+      correctCount: 5,
       totalQuestions: 5,
       totalTimeSeconds: 60,
       maxStreak: 3,
-      answers: []
+      answers: [],
+      passed: true
     }
   ];
 
@@ -181,50 +183,68 @@ test('calculateWeeklyLeaderboard accurately tracks completion and ranks players'
   // Player 1 completed this week
   assert.equal(leaderboard[0].player.id, 'p1');
   assert.equal(leaderboard[0].hasCompletedThisWeek, true);
-  assert.equal(leaderboard[0].bestScoreThisWeek, 450);
+  assert.equal(leaderboard[0].bestScoreThisWeek, 60);
+  assert.equal(leaderboard[0].averageTimeThisWeek, 60);
 
   // Player 2 has NOT completed this week
   assert.equal(leaderboard[1].player.id, 'p2');
   assert.equal(leaderboard[1].hasCompletedThisWeek, false);
   assert.equal(leaderboard[1].bestScoreThisWeek, 0);
+  assert.equal(leaderboard[1].averageTimeThisWeek, 0);
 });
 
-test('calculateWeeklyTrends aggregates scores and accuracy chronologically', () => {
+test('calculateWeeklyTrends aggregates scores and accuracy chronologically, excluding failed quizzes from average time', () => {
   const attempts: QuizAttempt[] = [
     {
       id: 'a1',
       playerId: 'p1',
       timestamp: '2026-11-01T10:00:00Z',
       weekKey: '2026-W44',
-      totalScore: 300,
-      correctCount: 2,
+      totalScore: 50,
+      correctCount: 5,
       totalQuestions: 5,
       totalTimeSeconds: 50,
-      maxStreak: 1,
-      answers: []
+      maxStreak: 5,
+      answers: [],
+      passed: true
     },
     {
       id: 'a2',
       playerId: 'p1',
       timestamp: '2026-11-08T10:00:00Z',
       weekKey: '2026-W45',
-      totalScore: 500,
-      correctCount: 4,
+      totalScore: 40,
+      correctCount: 5,
       totalQuestions: 5,
       totalTimeSeconds: 40,
-      maxStreak: 3,
-      answers: []
+      maxStreak: 5,
+      answers: [],
+      passed: true
+    },
+    {
+      id: 'a3-failed',
+      playerId: 'p1',
+      timestamp: '2026-11-08T11:00:00Z',
+      weekKey: '2026-W45',
+      totalScore: 5,
+      correctCount: 1,
+      totalQuestions: 5,
+      totalTimeSeconds: 5,
+      maxStreak: 1,
+      answers: [],
+      passed: false
     }
   ];
 
   const trends = calculateWeeklyTrends(attempts);
   assert.equal(trends.length, 2);
   assert.equal(trends[0].weekKey, '2026-W44');
-  assert.equal(trends[0].averageScore, 300);
-  assert.equal(trends[0].averageAccuracy, 40);
+  assert.equal(trends[0].averageScore, 50);
+  assert.equal(trends[0].averageAccuracy, 100);
   assert.equal(trends[1].weekKey, '2026-W45');
-  assert.equal(trends[1].averageScore, 500);
-  assert.equal(trends[1].averageAccuracy, 80);
+  // W45 has 1 passed attempt (40s) and 1 failed attempt (5s) -> average time must be 40s (not 22s!)
+  assert.equal(trends[1].averageScore, 40);
+  assert.equal(trends[1].averageAccuracy, 60);
 });
 
 test('filterQuestionsForTeam includes global and team-specific questions while excluding other teams', () => {
@@ -288,6 +308,46 @@ test('getTeamQuizConfig applies team overrides while preserving topicLabels', ()
   assert.deepEqual(resolved.topicLabels, ['Offense', 'Defense']);
 
   assert.deepEqual(getTeamQuizConfig(null, fallback), fallback);
+});
+
+test('calculateAllTimeLeaderboard aggregates all attempts across weeks', () => {
+  const players: Player[] = [
+    { id: 'p1', name: 'Marcus Smart', avatarColor: '#10b981' }
+  ];
+
+  const attempts: QuizAttempt[] = [
+    {
+      id: 'att1',
+      playerId: 'p1',
+      timestamp: '2026-10-01T10:00:00Z',
+      weekKey: '2026-W40',
+      totalScore: 300,
+      correctCount: 5,
+      totalQuestions: 5,
+      totalTimeSeconds: 45,
+      maxStreak: 5,
+      answers: [],
+      passed: true
+    },
+    {
+      id: 'att2',
+      playerId: 'p1',
+      timestamp: '2026-11-02T10:00:00Z',
+      weekKey: '2026-W45',
+      totalScore: 450,
+      correctCount: 5,
+      totalQuestions: 5,
+      totalTimeSeconds: 30,
+      maxStreak: 5,
+      answers: [],
+      passed: true
+    }
+  ];
+
+  const leaderboard = calculateAllTimeLeaderboard(players, attempts);
+  assert.equal(leaderboard.length, 1);
+  assert.equal(leaderboard[0].player.id, 'p1');
+  assert.equal(leaderboard[0].bestScoreThisWeek, 30);
 });
 
 

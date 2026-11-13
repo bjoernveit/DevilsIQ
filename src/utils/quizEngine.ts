@@ -253,6 +253,7 @@ export interface PlayerWeeklySummary {
   attemptsThisWeek: number;
   totalAttemptsAllTime: number;
   bestScoreThisWeek: number;
+  averageTimeThisWeek: number;
   averageAccuracyThisWeek: number;
   lastAttemptDate?: string;
   totalPointsThisWeek: number;
@@ -271,19 +272,26 @@ export function calculateWeeklyLeaderboard(
     const playerAttempts = attempts.filter(a => a.playerId === player.id);
     const thisWeekAttempts = playerAttempts.filter(a => a.weekKey === targetWeekKey);
 
-    const hasCompletedThisWeek = thisWeekAttempts.length >= 1;
+    const passedAttempts = thisWeekAttempts.filter(
+      a => a.passed === true || a.correctCount === a.totalQuestions
+    );
+    const hasCompletedThisWeek = passedAttempts.length > 0;
     const attemptsThisWeek = thisWeekAttempts.length;
     const totalAttemptsAllTime = playerAttempts.length;
 
     let bestScoreThisWeek = 0;
+    let averageTimeThisWeek = 0;
+    if (passedAttempts.length > 0) {
+      bestScoreThisWeek = Math.min(...passedAttempts.map(a => a.totalTimeSeconds));
+      const totalPassedTime = passedAttempts.reduce((sum, a) => sum + a.totalTimeSeconds, 0);
+      averageTimeThisWeek = Math.round(totalPassedTime / passedAttempts.length);
+    }
+
     let totalPointsThisWeek = 0;
     let totalQuestionsThisWeek = 0;
     let totalCorrectThisWeek = 0;
 
     for (const att of thisWeekAttempts) {
-      if (att.totalScore > bestScoreThisWeek) {
-        bestScoreThisWeek = att.totalScore;
-      }
       totalPointsThisWeek += att.totalScore;
       totalQuestionsThisWeek += att.totalQuestions;
       totalCorrectThisWeek += att.correctCount;
@@ -307,16 +315,87 @@ export function calculateWeeklyLeaderboard(
       attemptsThisWeek,
       totalAttemptsAllTime,
       bestScoreThisWeek,
+      averageTimeThisWeek,
       averageAccuracyThisWeek,
       lastAttemptDate,
       totalPointsThisWeek,
       seasonTotalScore
     };
   }).sort((a, b) => {
-    // Priority: completed players with higher best scores first
+    // Priority: completed/passed players first, sorted by lowest time (bestScoreThisWeek) ascending
     if (a.hasCompletedThisWeek && !b.hasCompletedThisWeek) return -1;
     if (!a.hasCompletedThisWeek && b.hasCompletedThisWeek) return 1;
-    return b.bestScoreThisWeek - a.bestScoreThisWeek;
+    if (a.hasCompletedThisWeek && b.hasCompletedThisWeek) {
+      return a.bestScoreThisWeek - b.bestScoreThisWeek;
+    }
+    return b.attemptsThisWeek - a.attemptsThisWeek;
+  });
+}
+
+/**
+ * Calculates all-time leaderboard and completion status for every player on the roster.
+ */
+export function calculateAllTimeLeaderboard(
+  players: Player[],
+  attempts: QuizAttempt[]
+): PlayerWeeklySummary[] {
+  return players.map(player => {
+    const playerAttempts = attempts.filter(a => a.playerId === player.id);
+    const passedAttempts = playerAttempts.filter(
+      a => a.passed === true || a.correctCount === a.totalQuestions
+    );
+    const hasCompletedThisWeek = passedAttempts.length > 0;
+    const attemptsThisWeek = playerAttempts.length;
+    const totalAttemptsAllTime = playerAttempts.length;
+
+    let bestScoreThisWeek = 0;
+    let averageTimeThisWeek = 0;
+    if (passedAttempts.length > 0) {
+      bestScoreThisWeek = Math.min(...passedAttempts.map(a => a.totalTimeSeconds));
+      const totalPassedTime = passedAttempts.reduce((sum, a) => sum + a.totalTimeSeconds, 0);
+      averageTimeThisWeek = Math.round(totalPassedTime / passedAttempts.length);
+    }
+
+    let totalPointsThisWeek = 0;
+    let totalQuestionsThisWeek = 0;
+    let totalCorrectThisWeek = 0;
+
+    for (const att of playerAttempts) {
+      totalPointsThisWeek += att.totalScore;
+      totalQuestionsThisWeek += att.totalQuestions;
+      totalCorrectThisWeek += att.correctCount;
+    }
+
+    const averageAccuracyThisWeek = totalQuestionsThisWeek > 0 
+      ? Math.round((totalCorrectThisWeek / totalQuestionsThisWeek) * 100) 
+      : 0;
+
+    const seasonTotalScore = playerAttempts.reduce((acc, a) => acc + a.totalScore, 0);
+
+    const sortedAttempts = [...playerAttempts].sort(
+      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    );
+    const lastAttemptDate = sortedAttempts[0]?.timestamp;
+
+    return {
+      player,
+      hasCompletedThisWeek,
+      attemptsThisWeek,
+      totalAttemptsAllTime,
+      bestScoreThisWeek,
+      averageTimeThisWeek,
+      averageAccuracyThisWeek,
+      lastAttemptDate,
+      totalPointsThisWeek,
+      seasonTotalScore
+    };
+  }).sort((a, b) => {
+    if (a.hasCompletedThisWeek && !b.hasCompletedThisWeek) return -1;
+    if (!a.hasCompletedThisWeek && b.hasCompletedThisWeek) return 1;
+    if (a.hasCompletedThisWeek && b.hasCompletedThisWeek) {
+      return a.bestScoreThisWeek - b.bestScoreThisWeek;
+    }
+    return b.attemptsThisWeek - a.attemptsThisWeek;
   });
 }
 
@@ -348,14 +427,25 @@ export function calculateWeeklyTrends(
   const weeks = Array.from(byWeek.keys()).sort();
   return weeks.map(weekKey => {
     const weekAttempts = byWeek.get(weekKey) || [];
-    const totalScore = weekAttempts.reduce((sum, a) => sum + a.totalScore, 0);
+    // Only passed attempts count towards average completion time
+    const passedAttempts = weekAttempts.filter(
+      a => a.passed === true || a.correctCount === a.totalQuestions
+    );
+    const totalPassedTime = passedAttempts.reduce(
+      (sum, a) => sum + (a.totalTimeSeconds || a.totalScore || 0),
+      0
+    );
+    const averageScore = passedAttempts.length > 0
+      ? Math.round(totalPassedTime / passedAttempts.length)
+      : 0;
+
     const totalQuestions = weekAttempts.reduce((sum, a) => sum + a.totalQuestions, 0);
     const totalCorrect = weekAttempts.reduce((sum, a) => sum + a.correctCount, 0);
 
     return {
       weekKey,
       attemptCount: weekAttempts.length,
-      averageScore: Math.round(totalScore / weekAttempts.length),
+      averageScore,
       averageAccuracy: totalQuestions > 0 ? Math.round((totalCorrect / totalQuestions) * 100) : 0
     };
   });

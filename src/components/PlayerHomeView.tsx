@@ -126,9 +126,13 @@ export const PlayerHomeView: React.FC<PlayerHomeViewProps> = ({
           {hasCompleted && (
             <div className="text-right">
               <p className="text-lg font-bold font-mono tabular-nums text-white">
-                {bestScore}
+                {bestScore > 0 ? `${bestScore}s` : '—'}
               </p>
-              <p className="text-[11px] text-zinc-400">Bestpunkte</p>
+              <p className="text-[11px] text-zinc-400">
+                {mySummary?.averageTimeThisWeek && mySummary.averageTimeThisWeek > 0 && mySummary.averageTimeThisWeek !== bestScore
+                  ? `Bestzeit (Ø ${mySummary.averageTimeThisWeek}s)`
+                  : 'Bestzeit'}
+              </p>
             </div>
           )}
         </div>

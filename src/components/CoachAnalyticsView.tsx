@@ -185,7 +185,7 @@ export const CoachAnalyticsView: React.FC<CoachAnalyticsViewProps> = ({
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-sm font-bold text-white">Team-Entwicklung</h2>
-            <p className="text-xs text-zinc-400">Durchschnittliche Trefferquote & Punkte pro Woche</p>
+            <p className="text-xs text-zinc-400">Durchschnittliche Trefferquote & Zeit pro Woche</p>
           </div>
         </div>
 
@@ -222,7 +222,7 @@ export const CoachAnalyticsView: React.FC<CoachAnalyticsViewProps> = ({
                     />
                   </div>
                   <div className="text-[11px] text-zinc-400 font-mono tabular-nums">
-                    Ø Punkte: {wk.averageScore} Pkt.
+                    {wk.averageScore > 0 ? `Ø Zeit: ${wk.averageScore}s` : 'Kein Durchgang bestanden'}
                   </div>
                 </div>
               );
@@ -304,16 +304,20 @@ export const CoachAnalyticsView: React.FC<CoachAnalyticsViewProps> = ({
             </div>
           ) : (
             leaderboard.map(summary => {
-              const playerAttempts = scopedAttempts
-                .filter(a => a.playerId === summary.player.id)
+              const playerPassedAttempts = scopedAttempts
+                .filter(
+                  a =>
+                    a.playerId === summary.player.id &&
+                    (a.passed === true || a.correctCount === a.totalQuestions)
+                )
                 .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
               let trend: 'up' | 'down' | 'flat' = 'flat';
-              if (playerAttempts.length >= 2) {
-                const last = playerAttempts[playerAttempts.length - 1].totalScore;
-                const prev = playerAttempts[playerAttempts.length - 2].totalScore;
-                if (last > prev + 20) trend = 'up';
-                else if (last < prev - 20) trend = 'down';
+              if (playerPassedAttempts.length >= 2) {
+                const last = playerPassedAttempts[playerPassedAttempts.length - 1].totalTimeSeconds;
+                const prev = playerPassedAttempts[playerPassedAttempts.length - 2].totalTimeSeconds;
+                if (last < prev - 2) trend = 'up'; // faster/better
+                else if (last > prev + 2) trend = 'down'; // slower/worse
               }
 
               return (

@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Question, QuizOption, QuizAttempt, QuizAttemptAnswer, Player } from '../types/basketball';
-import { calculateQuestionScore, getWeekKey } from '../utils/quizEngine';
+import { getWeekKey } from '../utils/quizEngine';
 import { playBuzzer, playSwish } from '../utils/audio';
-import { Timer, Check, X, ArrowRight, Volume2, VolumeX } from 'lucide-react';
+import { Timer, Check, X, Volume2, VolumeX } from 'lucide-react';
 
 interface QuizSessionProps {
   questions: Question[];
@@ -25,18 +25,35 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
   const [hasSubmittedAnswer, setHasSubmittedAnswer] = useState(false);
   const [streak, setStreak] = useState(0);
   const [maxStreak, setMaxStreak] = useState(0);
-  const [totalScore, setTotalScore] = useState(0);
   const [recordedAnswers, setRecordedAnswers] = useState<QuizAttemptAnswer[]>([]);
   const [soundEnabled, setSoundEnabled] = useState(true);
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const startTimeRef = useRef<number>(Date.now());
+  const transitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const currentQuestion = questions[currentIndex];
   const isLastQuestion = currentIndex === questions.length - 1;
-  const hasVisualOptions = currentQuestion.options.some(o => Boolean(o.imageUrl));
+  const [shuffledOptions, setShuffledOptions] = useState<QuizOption[]>([]);
 
   useEffect(() => {
-    if (hasSubmittedAnswer) return;
+    if (!currentQuestion) return;
+    const shuffled = [...currentQuestion.options].sort(() => Math.random() - 0.5);
+    setShuffledOptions(shuffled);
+  }, [currentIndex, currentQuestion]);
+
+  const hasVisualOptions = shuffledOptions.some(o => Boolean(o.imageUrl));
+
+  useEffect(() => {
+    startTimeRef.current = Date.now();
+  }, []);
+
+  useEffect(() => {
+    if (hasSubmittedAnswer) {
+      if (timerRef.current) clearInterval(timerRef.current);
+      return;
+    }
+
     setTimeRemaining(timePerQuestion);
 
     timerRef.current = setInterval(() => {
@@ -55,6 +72,32 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
     };
   }, [currentIndex, hasSubmittedAnswer]);
 
+  // Unmount cleanup for transition timer
+  useEffect(() => {
+    return () => {
+      if (transitionTimerRef.current) clearTimeout(transitionTimerRef.current);
+    };
+  }, []);
+
+  const finishSession = (answers: QuizAttemptAnswer[], passed: boolean) => {
+    const totalTime = Math.max(1, Math.round((Date.now() - startTimeRef.current) / 1000));
+    const correctCount = answers.filter(a => a.isCorrect).length;
+
+    onFinishQuiz({
+      id: `att-${Date.now()}`,
+      playerId: player.id,
+      timestamp: new Date().toISOString(),
+      weekKey: getWeekKey(),
+      totalScore: totalTime, // Score is time in seconds (lower is better)
+      correctCount,
+      totalQuestions: questions.length,
+      totalTimeSeconds: totalTime,
+      maxStreak,
+      answers,
+      passed
+    });
+  };
+
   const handleTimeExpired = () => {
     if (hasSubmittedAnswer) return;
     if (soundEnabled) playBuzzer();
@@ -67,9 +110,14 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
       pointsEarned: 0
     };
 
-    setStreak(0);
-    setRecordedAnswers(prev => [...prev, answerRecord]);
+    const nextAnswers = [...recordedAnswers, answerRecord];
+    setRecordedAnswers(nextAnswers);
     setHasSubmittedAnswer(true);
+
+    // Sudden death: failed on timeout
+    transitionTimerRef.current = setTimeout(() => {
+      finishSession(nextAnswers, false);
+    }, 700);
   };
 
   const handleSelectOption = (option: QuizOption) => {
@@ -86,8 +134,7 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
       const nextStreak = streak + 1;
       setStreak(nextStreak);
       if (nextStreak > maxStreak) setMaxStreak(nextStreak);
-      points = calculateQuestionScore(true, timeRemaining, timePerQuestion, streak);
-      setTotalScore(prev => prev + points);
+      points = 100;
     } else {
       if (soundEnabled) playBuzzer();
       setStreak(0);
@@ -101,31 +148,29 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
       pointsEarned: points
     };
 
-    setRecordedAnswers(prev => [...prev, answerRecord]);
+    const nextAnswers = [...recordedAnswers, answerRecord];
+    setRecordedAnswers(nextAnswers);
     setHasSubmittedAnswer(true);
-  };
 
-  const handleNextQuestion = () => {
-    if (isLastQuestion) {
-      const totalTime = recordedAnswers.reduce((sum, a) => sum + a.timeSpentSeconds, 0);
-      const correctCount = recordedAnswers.filter(a => a.isCorrect).length;
-
-      onFinishQuiz({
-        id: `att-${Date.now()}`,
-        playerId: player.id,
-        timestamp: new Date().toISOString(),
-        weekKey: getWeekKey(),
-        totalScore,
-        correctCount,
-        totalQuestions: questions.length,
-        totalTimeSeconds: totalTime,
-        maxStreak,
-        answers: recordedAnswers
-      });
+    if (isCorrect) {
+      if (isLastQuestion) {
+        // Successfully passed all questions!
+        transitionTimerRef.current = setTimeout(() => {
+          finishSession(nextAnswers, true);
+        }, 500);
+      } else {
+        // Correct answer: flash green and show next question right away
+        transitionTimerRef.current = setTimeout(() => {
+          setSelectedOptionId(null);
+          setHasSubmittedAnswer(false);
+          setCurrentIndex(prev => prev + 1);
+        }, 450);
+      }
     } else {
-      setSelectedOptionId(null);
-      setHasSubmittedAnswer(false);
-      setCurrentIndex(prev => prev + 1);
+      // Incorrect answer: sudden death failure
+      transitionTimerRef.current = setTimeout(() => {
+        finishSession(nextAnswers, false);
+      }, 700);
     }
   };
 
@@ -138,10 +183,10 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
         <div className="flex items-center justify-between text-xs text-zinc-400">
           <div className="flex items-center gap-2">
             <span className="font-mono font-semibold text-white">
-              {currentIndex + 1} / {questions.length}
+              Frage {currentIndex + 1} von {questions.length}
             </span>
             <span aria-hidden="true">·</span>
-            <span className="font-mono tabular-nums">{totalScore} Pkt.</span>
+            <span className="text-red-400 font-medium">Kein Fehler erlaubt</span>
           </div>
 
           <div className="flex items-center gap-3">
@@ -209,7 +254,7 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
 
         {/* Answer Options (Text and/or Image) */}
         <div className={hasVisualOptions ? 'grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1' : 'space-y-2.5 pt-1'}>
-          {currentQuestion.options.map((opt, idx) => {
+          {shuffledOptions.map((opt, idx) => {
             const letter = String.fromCharCode(65 + idx);
             const isSelected = selectedOptionId === opt.id;
             const isCorrect = opt.isCorrect;
@@ -274,35 +319,6 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
             );
           })}
         </div>
-
-        {/* Minimal Post-Answer Feedback */}
-        {hasSubmittedAnswer && (
-          <div className="p-3.5 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-zinc-300 leading-relaxed space-y-1">
-            <div className="font-semibold text-white">
-              {selectedOptionId && currentQuestion.options.find(o => o.id === selectedOptionId)?.isCorrect
-                ? `Richtig (+${recordedAnswers[recordedAnswers.length - 1]?.pointsEarned || 0} Pkt.)`
-                : selectedOptionId === 'TIME_EXPIRED'
-                ? 'Zeit abgelaufen'
-                : 'Falsch'}
-            </div>
-            {currentQuestion.explanation && <p>{currentQuestion.explanation}</p>}
-          </div>
-        )}
-      </div>
-
-      {/* Bottom Action */}
-      <div>
-        {hasSubmittedAnswer ? (
-          <button
-            onClick={handleNextQuestion}
-            className="w-full h-12 rounded-xl bg-red-700 hover:bg-red-600 text-white font-semibold text-sm flex items-center justify-center gap-2 active:scale-[0.99] transition-all"
-          >
-            <span>{isLastQuestion ? 'Quiz beenden' : 'Nächste Frage'}</span>
-            <ArrowRight className="w-4 h-4" />
-          </button>
-        ) : (
-          <div className="h-12" />
-        )}
       </div>
     </div>
   );

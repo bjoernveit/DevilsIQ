@@ -391,6 +391,17 @@ export default function App() {
     await deleteQuestionFromFirestore(questionId);
   };
 
+  const handleDuplicateQuestion = (q: Question) => {
+    const duplicated: Question = {
+      ...q,
+      id: '',
+      title: `${q.title} (Kopie)`,
+      createdAt: new Date().toISOString()
+    };
+    setEditingQuestion(duplicated);
+    setIsEditorOpen(true);
+  };
+
   const handleTogglePriorityFocus = async (questionId: string) => {
     const target = questions.find(q => q.id === questionId);
     if (!target) return;
@@ -644,6 +655,7 @@ export default function App() {
                   setEditingQuestion(q);
                   setIsEditorOpen(true);
                 }}
+                onDuplicateQuestion={handleDuplicateQuestion}
                 onDeleteQuestion={handleDeleteQuestion}
                 onTogglePriorityFocus={handleTogglePriorityFocus}
                 onRemoveTopicLabel={handleRemoveTopicLabel}

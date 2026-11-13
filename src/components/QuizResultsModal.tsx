@@ -1,6 +1,6 @@
 import React from 'react';
 import { QuizAttempt, Question, Player } from '../types/basketball';
-import { Check, X, RotateCcw, ArrowRight } from 'lucide-react';
+import { Check, X, RotateCcw, ArrowRight, Trophy } from 'lucide-react';
 
 interface QuizResultsModalProps {
   attempt: QuizAttempt | null;
@@ -25,22 +25,32 @@ export const QuizResultsModal: React.FC<QuizResultsModalProps> = ({
 
   const questionMap = new Map<string, Question>();
   questions.forEach(q => questionMap.set(q.id, q));
-  const accuracy = Math.round((attempt.correctCount / attempt.totalQuestions) * 100);
+
+  const passed = attempt.passed ?? (attempt.correctCount === attempt.totalQuestions);
 
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-black/75 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6">
       <div className="relative w-full max-w-lg bg-zinc-900 border border-zinc-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
         {/* Header Summary */}
-        <div className="p-6 text-center border-b border-zinc-800 space-y-4">
+        <div className={`p-6 text-center border-b border-zinc-800 space-y-3 ${passed ? 'bg-emerald-950/20' : 'bg-red-950/30'}`}>
+          <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-zinc-950 border border-zinc-800 mb-1">
+            {passed ? (
+              <Trophy className="w-6 h-6 text-emerald-400" />
+            ) : (
+              <X className="w-6 h-6 text-red-400" />
+            )}
+          </div>
           <div>
             <p className="text-xs font-medium text-zinc-400">
-              {player.name} · Wochen-Quiz abgeschlossen
+              {player.name} · {passed ? 'Quiz erfolgreich bestanden! 🎉' : 'Quiz fehlgeschlagen ❌'}
             </p>
             <h2 className="text-3xl font-bold font-mono tabular-nums text-white mt-1">
-              {attempt.totalScore} Pkt.
+              {attempt.totalTimeSeconds}s
             </h2>
-            <p className="text-xs text-zinc-400 mt-1 tabular-nums">
-              {attempt.correctCount} von {attempt.totalQuestions} richtig ({accuracy}%) · {attempt.totalTimeSeconds}s
+            <p className="text-xs text-zinc-400 mt-1">
+              {passed
+                ? `Alle ${attempt.totalQuestions} Fragen fehlerfrei gelöst (${attempt.totalTimeSeconds} Sekunden)`
+                : `Fehler bei Frage ${attempt.correctCount + 1}. Ziel: ${attempt.totalQuestions} Fragen ohne Fehler.`}
             </p>
           </div>
         </div>
@@ -69,8 +79,8 @@ export const QuizResultsModal: React.FC<QuizResultsModalProps> = ({
                       {idx + 1}. {q.scenario || q.title}
                     </span>
                   </div>
-                  <span className="font-mono text-zinc-300 shrink-0">
-                    +{ans.pointsEarned}
+                  <span className="font-mono text-zinc-400 shrink-0 tabular-nums">
+                    {ans.timeSpentSeconds}s
                   </span>
                 </div>
 
@@ -91,7 +101,7 @@ export const QuizResultsModal: React.FC<QuizResultsModalProps> = ({
             className="flex-1 px-4 py-2.5 rounded-xl border border-zinc-700 bg-zinc-900 hover:bg-zinc-800 text-zinc-200 text-xs font-semibold flex items-center justify-center gap-1.5 min-h-[44px] transition-colors"
           >
             <RotateCcw className="w-3.5 h-3.5" />
-            <span>Nochmal üben</span>
+            <span>Nochmal versuchen</span>
           </button>
           <button
             onClick={onGoToLeaderboard}

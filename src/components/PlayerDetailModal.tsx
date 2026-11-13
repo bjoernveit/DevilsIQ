@@ -45,6 +45,12 @@ export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
     .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
   const thisWeekAttempts = playerAttempts.filter(a => a.weekKey === currentWeek);
+  const thisWeekPassed = thisWeekAttempts.some(a => a.passed === true || a.correctCount === a.totalQuestions);
+  const passedAttempts = playerAttempts.filter(a => a.passed === true || a.correctCount === a.totalQuestions);
+  const averagePassedTime = passedAttempts.length > 0
+    ? Math.round(passedAttempts.reduce((sum, a) => sum + a.totalTimeSeconds, 0) / passedAttempts.length)
+    : 0;
+
   const playerGaps = calculateTacticalGaps(questions, playerAttempts, player.id).filter(g => g.totalAnswered > 0);
   const playerTrends = calculateWeeklyTrends(attempts, player.id);
 
@@ -104,19 +110,23 @@ export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
             <div className="p-3 bg-zinc-950 rounded-xl border border-zinc-800">
               <div className="text-[11px] text-zinc-400">Diese Woche</div>
               <div className="text-base font-bold font-mono text-white mt-0.5">
-                {thisWeekAttempts.length > 0 ? 'Fertig' : 'Offen'}
+                {thisWeekPassed ? 'Fertig' : 'Offen'}
               </div>
             </div>
             <div className="p-3 bg-zinc-950 rounded-xl border border-zinc-800">
-              <div className="text-[11px] text-zinc-400">Versuche</div>
+              <div className="text-[11px] text-zinc-400">Bestanden / Gesamt</div>
               <div className="text-base font-bold font-mono tabular-nums text-white mt-0.5">
-                {playerAttempts.length}
+                {passedAttempts.length} / {playerAttempts.length}
               </div>
             </div>
             <div className="p-3 bg-zinc-950 rounded-xl border border-zinc-800">
-              <div className="text-[11px] text-zinc-400">Bestwert</div>
+              <div className="text-[11px] text-zinc-400">
+                {averagePassedTime > 0 && passedAttempts.length > 1 ? `Bestzeit (Ø ${averagePassedTime}s)` : 'Bestzeit'}
+              </div>
               <div className="text-base font-bold font-mono tabular-nums text-white mt-0.5">
-                {playerAttempts.length > 0 ? Math.max(...playerAttempts.map(a => a.totalScore)) : '—'}
+                {passedAttempts.length > 0
+                  ? `${Math.min(...passedAttempts.map(a => a.totalTimeSeconds))}s`
+                  : '—'}
               </div>
             </div>
           </div>
@@ -134,7 +144,7 @@ export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
                       {t.weekKey === currentWeek ? 'Diese Woche' : t.weekKey}
                     </span>
                     <span className="font-mono tabular-nums text-white font-semibold">
-                      {t.averageAccuracy}% Quote · Ø {t.averageScore} Pkt.
+                      {t.averageAccuracy}% Quote · {t.averageScore > 0 ? `Ø ${t.averageScore}s` : 'Kein Durchgang bestanden'}
                     </span>
                   </div>
                 ))}
@@ -189,9 +199,9 @@ export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
                       </div>
                     </div>
                     <div className="text-right font-mono tabular-nums">
-                      <div className="font-bold text-white">{att.totalScore} Pkt.</div>
+                      <div className="font-bold text-white">{att.totalTimeSeconds}s</div>
                       <div className="text-[11px] text-zinc-400">
-                        {att.correctCount}/{att.totalQuestions} · {att.totalTimeSeconds}s
+                        {att.correctCount}/{att.totalQuestions} · {att.passed ? 'Bestanden' : 'Fehlgeschlagen'}
                       </div>
                     </div>
                   </div>

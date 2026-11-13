@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Question, Team } from '../types/basketball';
-import { Plus, Search, Star, Trash2, Edit3, X } from 'lucide-react';
+import { Plus, Search, Star, Trash2, Edit3, X, Copy } from 'lucide-react';
 
 interface QuestionBankViewProps {
   questions: Question[];
@@ -10,6 +10,7 @@ interface QuestionBankViewProps {
   topicLabels: string[];
   onAddQuestion: () => void;
   onEditQuestion: (question: Question) => void;
+  onDuplicateQuestion: (question: Question) => void;
   onDeleteQuestion: (questionId: string) => void;
   onTogglePriorityFocus: (questionId: string) => void;
   onRemoveTopicLabel: (tag: string) => Promise<void>;
@@ -23,6 +24,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
   topicLabels,
   onAddQuestion,
   onEditQuestion,
+  onDuplicateQuestion,
   onDeleteQuestion,
   onTogglePriorityFocus,
   onRemoveTopicLabel
@@ -271,6 +273,15 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                         q.isPriorityFocus ? 'fill-red-500 text-red-500' : 'text-zinc-500 hover:text-zinc-300'
                       }`}
                     />
+                  </button>
+
+                  <button
+                    onClick={() => onDuplicateQuestion(q)}
+                    className="p-2 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800 min-h-[40px] min-w-[40px] flex items-center justify-center transition-colors"
+                    aria-label={`Frage duplizieren: ${promptText}`}
+                    title="Frage duplizieren"
+                  >
+                    <Copy className="w-4 h-4" />
                   </button>
 
                   <button

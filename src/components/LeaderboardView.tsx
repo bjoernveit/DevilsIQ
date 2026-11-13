@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Player, QuizAttempt, Team } from '../types/basketball';
-import { calculateWeeklyLeaderboard, getWeekKey } from '../utils/quizEngine';
+import { calculateWeeklyLeaderboard, calculateAllTimeLeaderboard, getWeekKey } from '../utils/quizEngine';
 
 interface LeaderboardViewProps {
   players: Player[];
@@ -21,6 +21,7 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
   onSelectPlayerDetail,
   embedded = false
 }) => {
+  const [boardType, setBoardType] = useState<'weekly' | 'alltime'>('weekly');
   const currentWeekKey = getWeekKey();
   const [selectedWeek, setSelectedWeek] = useState<string>(currentWeekKey);
   const [filterMode, setFilterMode] = useState<'all' | 'completed' | 'pending'>('all');
@@ -38,7 +39,10 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
     ? attempts.filter(a => !a.teamId || a.teamId === activeTeam.id)
     : attempts;
 
-  const leaderboardData = calculateWeeklyLeaderboard(scopedPlayers, scopedAttempts, selectedWeek);
+  const leaderboardData = boardType === 'weekly'
+    ? calculateWeeklyLeaderboard(scopedPlayers, scopedAttempts, selectedWeek)
+    : calculateAllTimeLeaderboard(scopedPlayers, scopedAttempts);
+
   const availableWeeks = Array.from(
     new Set([currentWeekKey, ...scopedAttempts.map(a => a.weekKey)])
   ).sort().reverse();
@@ -54,39 +58,61 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
 
   return (
     <div className={embedded ? 'space-y-4 pt-2' : 'max-w-2xl mx-auto px-4 py-6 space-y-5'}>
+      {/* Board Type Selector Toggle */}
+      <div className="flex items-center gap-1 p-1 bg-zinc-900 border border-zinc-800 rounded-xl w-fit">
+        <button
+          onClick={() => setBoardType('weekly')}
+          className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-colors min-h-[36px] ${
+            boardType === 'weekly' ? 'bg-red-700 text-white shadow-xs' : 'text-zinc-400 hover:text-zinc-200'
+          }`}
+        >
+          Diese Woche
+        </button>
+        <button
+          onClick={() => setBoardType('alltime')}
+          className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-colors min-h-[36px] ${
+            boardType === 'alltime' ? 'bg-red-700 text-white shadow-xs' : 'text-zinc-400 hover:text-zinc-200'
+          }`}
+        >
+          All-Time Rangliste
+        </button>
+      </div>
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
         <div>
           {embedded ? (
             <h2 className="text-base font-bold text-white">
-              Wochen-Rangliste{isTeamScoped && activeTeam ? ` · ${activeTeam.name}` : ''}
+              {boardType === 'weekly' ? 'Wochen-Rangliste' : 'All-Time Rangliste'}{isTeamScoped && activeTeam ? ` · ${activeTeam.name}` : ''}
             </h2>
           ) : (
             <h1 className="text-xl font-bold text-white">
-              Wochen-Rangliste{isTeamScoped && activeTeam ? ` · ${activeTeam.name}` : ''}
+              {boardType === 'weekly' ? 'Wochen-Rangliste' : 'All-Time Rangliste'}{isTeamScoped && activeTeam ? ` · ${activeTeam.name}` : ''}
             </h1>
           )}
           <p className="text-xs text-zinc-400 mt-0.5 tabular-nums">
-            {completedPlayers} von {totalPlayers} Spielern fertig · {selectedWeek === currentWeekKey ? 'Diese Woche' : selectedWeek}
+            {completedPlayers} von {totalPlayers} Spielern · {boardType === 'weekly' ? (selectedWeek === currentWeekKey ? 'Diese Woche' : selectedWeek) : 'Gesamtwertung'}
           </p>
         </div>
 
         {/* Week Selector */}
-        <div className="flex items-center gap-1.5 flex-wrap">
-          {availableWeeks.map(wk => (
-            <button
-              key={wk}
-              onClick={() => setSelectedWeek(wk)}
-              className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors min-h-[36px] whitespace-nowrap ${
-                selectedWeek === wk
-                  ? 'bg-red-700 text-white'
-                  : 'bg-zinc-900 border border-zinc-800 text-zinc-300 hover:bg-zinc-800'
-              }`}
-            >
-              {wk === currentWeekKey ? 'Diese Woche' : wk.split('-')[1] || wk}
-            </button>
-          ))}
-        </div>
+        {boardType === 'weekly' && (
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {availableWeeks.map(wk => (
+              <button
+                key={wk}
+                onClick={() => setSelectedWeek(wk)}
+                className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors min-h-[36px] whitespace-nowrap ${
+                  selectedWeek === wk
+                    ? 'bg-red-700 text-white'
+                    : 'bg-zinc-900 border border-zinc-800 text-zinc-300 hover:bg-zinc-800'
+                }`}
+              >
+                {wk === currentWeekKey ? 'Diese Woche' : wk.split('-')[1] || wk}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Filter & Team Scope Segmented Controls */}
@@ -184,10 +210,10 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
                 <div className="flex items-center gap-4 shrink-0 text-right">
                   <div>
                     <div className="text-sm font-bold font-mono tabular-nums text-white">
-                      {item.bestScoreThisWeek > 0 ? `${item.bestScoreThisWeek}` : '—'}
+                      {item.bestScoreThisWeek > 0 ? `${item.bestScoreThisWeek}s` : '—'}
                     </div>
                     <div className="text-[11px] text-zinc-400 font-mono tabular-nums">
-                      {item.bestScoreThisWeek > 0 ? `${item.averageAccuracyThisWeek}%` : 'Offen'}
+                      {item.bestScoreThisWeek > 0 ? 'Bestzeit' : 'Offen'}
                     </div>
                   </div>
                 </div>

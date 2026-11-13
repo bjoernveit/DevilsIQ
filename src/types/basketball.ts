@@ -83,6 +83,7 @@ export interface QuizAttempt {
   totalTimeSeconds: number;
   maxStreak: number;
   answers: QuizAttemptAnswer[];
+  passed?: boolean;
 }
 
 export interface QuizConfig {

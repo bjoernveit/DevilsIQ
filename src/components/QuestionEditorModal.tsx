@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Question, QuizOption } from '../types/basketball';
+import { Question, QuizOption, Team } from '../types/basketball';
 import { X, Plus, Trash2, Check, Star, Image as ImageIcon } from 'lucide-react';
 
 interface QuestionEditorModalProps {
@@ -8,6 +8,8 @@ interface QuestionEditorModalProps {
   onClose: () => void;
   onSave: (question: Question) => void;
   existingTags: string[];
+  teams?: Team[];
+  defaultTeamIds?: string[];
   onRemoveTopicLabel?: (tag: string) => Promise<void>;
 }
 
@@ -62,6 +64,8 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
   onClose,
   onSave,
   existingTags,
+  teams = [],
+  defaultTeamIds = [],
   onRemoveTopicLabel
 }) => {
   const [promptText, setPromptText] = useState(
@@ -72,6 +76,9 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
     question?.isPriorityFocus ?? false
   );
   const [selectedTags, setSelectedTags] = useState<string[]>(question?.tags ?? []);
+  const [selectedTeamIds, setSelectedTeamIds] = useState<string[]>(
+    question?.teamIds ?? defaultTeamIds
+  );
   const [newTagInput, setNewTagInput] = useState('');
   const [options, setOptions] = useState<QuizOption[]>(
     question?.options && question.options.length >= 2
@@ -85,6 +92,7 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
       setImageUrl(question?.imageUrl || '');
       setIsPriorityFocus(question?.isPriorityFocus ?? false);
       setSelectedTags(question?.tags ?? []);
+      setSelectedTeamIds(question ? (question.teamIds ?? []) : defaultTeamIds);
       setNewTagInput('');
       setOptions(
         question?.options && question.options.length >= 2
@@ -92,7 +100,8 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
           : DEFAULT_OPTIONS.map(o => ({ ...o }))
       );
     }
-  }, [isOpen, question]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, question?.id]);
 
   if (!isOpen) return null;
 
@@ -134,6 +143,7 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
       keyConcept: shortTitle,
       isPriorityFocus,
       tags: selectedTags,
+      teamIds: selectedTeamIds.length > 0 ? selectedTeamIds : undefined,
       explanation: '',
       options: validatedOptions,
       imageUrl: imageUrl.trim() ? imageUrl.trim() : undefined,
@@ -142,6 +152,12 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
 
     onSave(updated);
     onClose();
+  };
+
+  const handleToggleTeam = (teamId: string) => {
+    setSelectedTeamIds(prev =>
+      prev.includes(teamId) ? prev.filter(id => id !== teamId) : [...prev, teamId]
+    );
   };
 
   const combinedTagList = Array.from(new Set([...existingTags, ...selectedTags]));
@@ -256,6 +272,54 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
               />
               <span>{isPriorityFocus ? 'Priorisiert' : 'Standard'}</span>
             </button>
+          </div>
+
+          {/* Team Assignment */}
+          <div className="p-3.5 rounded-xl bg-zinc-950 border border-zinc-800 space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-semibold text-white">Gilt für Teams</span>
+              <span className="text-[11px] text-zinc-400">
+                {selectedTeamIds.length === 0 ? 'Alle Teams' : `${selectedTeamIds.length} ausgewählt`}
+              </span>
+            </div>
+
+            <div className="flex flex-wrap gap-1.5">
+              <button
+                type="button"
+                onClick={() => setSelectedTeamIds([])}
+                className={`px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors min-h-[34px] ${
+                  selectedTeamIds.length === 0
+                    ? 'bg-red-700 border-red-700 text-white'
+                    : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:border-zinc-700'
+                }`}
+              >
+                Alle Teams
+              </button>
+
+              {teams.map(team => {
+                const isSelected = selectedTeamIds.includes(team.id);
+                return (
+                  <button
+                    key={team.id}
+                    type="button"
+                    onClick={() => handleToggleTeam(team.id)}
+                    className={`px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors min-h-[34px] ${
+                      isSelected
+                        ? 'bg-red-700 border-red-700 text-white'
+                        : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:border-zinc-700'
+                    }`}
+                  >
+                    {team.name}
+                  </button>
+                );
+              })}
+            </div>
+
+            {teams.length === 0 && (
+              <p className="text-[11px] text-zinc-500">
+                Lege im Tab „Teams“ Mannschaften an, um Fragen gezielt einzelnen Teams zuzuweisen.
+              </p>
+            )}
           </div>
 
           {/* Tags */}

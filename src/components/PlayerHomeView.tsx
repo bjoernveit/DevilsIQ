@@ -1,5 +1,5 @@
 import React from 'react';
-import { Player, QuizAttempt, QuizConfig } from '../types/basketball';
+import { Player, QuizAttempt, QuizConfig, Team } from '../types/basketball';
 import { calculateWeeklyLeaderboard, getWeekKey } from '../utils/quizEngine';
 import { LeaderboardView } from './LeaderboardView';
 import { Play, SlidersHorizontal, Check, Clock } from 'lucide-react';
@@ -8,6 +8,10 @@ interface PlayerHomeViewProps {
   player: Player;
   players: Player[];
   attempts: QuizAttempt[];
+  teams: Team[];
+  selectableTeams: Team[];
+  activeTeam: Team | null;
+  onSelectTeamId: (teamId: string | null) => void;
   quizConfig: QuizConfig;
   questionCount: number;
   isCoach: boolean;
@@ -21,6 +25,10 @@ export const PlayerHomeView: React.FC<PlayerHomeViewProps> = ({
   player,
   players,
   attempts,
+  teams,
+  selectableTeams,
+  activeTeam,
+  onSelectTeamId,
   quizConfig,
   questionCount,
   isCoach,
@@ -30,9 +38,12 @@ export const PlayerHomeView: React.FC<PlayerHomeViewProps> = ({
   onGoToCoachQuestions
 }) => {
   const currentWeek = getWeekKey();
-  const leaderboard = calculateWeeklyLeaderboard(players, attempts, currentWeek);
-  const myIndex = leaderboard.findIndex(item => item.player.id === player.id);
-  const mySummary = leaderboard[myIndex];
+  const scopedAttempts = activeTeam
+    ? attempts.filter(a => !a.teamId || a.teamId === activeTeam.id)
+    : attempts;
+
+  const leaderboard = calculateWeeklyLeaderboard([player], scopedAttempts, currentWeek);
+  const mySummary = leaderboard[0];
 
   const hasCompleted = mySummary?.hasCompletedThisWeek ?? false;
   const bestScore = mySummary?.bestScoreThisWeek ?? 0;
@@ -41,14 +52,49 @@ export const PlayerHomeView: React.FC<PlayerHomeViewProps> = ({
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-8 sm:py-10 space-y-8">
-      {/* Player Identity Row */}
-      <div>
-        <p className="text-xs font-medium text-zinc-400">
-          KW {currentWeek.split('-W')[1] || currentWeek}
-        </p>
-        <h1 className="text-2xl font-bold tracking-tight text-white mt-0.5">
-          {player.name}
-        </h1>
+      {/* Player Identity Row & Team Switcher */}
+      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
+        <div>
+          <p className="text-xs font-medium text-zinc-400">
+            KW {currentWeek.split('-W')[1] || currentWeek}
+            {activeTeam ? ` · ${activeTeam.name}` : ''}
+          </p>
+          <h1 className="text-2xl font-bold tracking-tight text-white mt-0.5">
+            {player.name}
+          </h1>
+        </div>
+
+        {(selectableTeams.length > 1 || (isCoach && selectableTeams.length > 0)) && (
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {isCoach && (
+              <button
+                type="button"
+                onClick={() => onSelectTeamId(null)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors min-h-[34px] whitespace-nowrap ${
+                  !activeTeam
+                    ? 'bg-red-700 text-white'
+                    : 'bg-zinc-900 border border-zinc-800 text-zinc-300 hover:bg-zinc-800'
+                }`}
+              >
+                Standard
+              </button>
+            )}
+            {selectableTeams.map(team => (
+              <button
+                key={team.id}
+                type="button"
+                onClick={() => onSelectTeamId(team.id)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors min-h-[34px] whitespace-nowrap ${
+                  activeTeam?.id === team.id
+                    ? 'bg-red-700 text-white'
+                    : 'bg-zinc-900 border border-zinc-800 text-zinc-300 hover:bg-zinc-800'
+                }`}
+              >
+                {team.name}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Main Weekly Quiz Card */}
@@ -92,7 +138,7 @@ export const PlayerHomeView: React.FC<PlayerHomeViewProps> = ({
           <span>
             {effectiveCount > 0
               ? `${effectiveCount} ${effectiveCount === 1 ? 'Frage' : 'Fragen'} · ${quizConfig.timePerQuestionSeconds}s pro Frage`
-              : 'Noch keine Fragen vorhanden'}
+              : 'Noch keine passenden Fragen vorhanden'}
           </span>
           {isCoach && (
             <button
@@ -133,6 +179,8 @@ export const PlayerHomeView: React.FC<PlayerHomeViewProps> = ({
         players={players}
         attempts={attempts}
         currentPlayerId={player.id}
+        activeTeam={activeTeam}
+        teams={teams}
         onSelectPlayerDetail={onSelectPlayerDetail}
         embedded
       />

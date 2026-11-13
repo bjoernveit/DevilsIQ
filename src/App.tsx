@@ -1,25 +1,34 @@
 import React, { useState, useEffect } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { collection, doc, onSnapshot } from 'firebase/firestore';
-import { Player, Question, QuizAttempt, QuizConfig } from './types/basketball';
+import { collection, doc, onSnapshot, query, where } from 'firebase/firestore';
+import { Player, Question, QuizAttempt, QuizConfig, Team } from './types/basketball';
 import { ALL_TAGS } from './data/initialData';
-import { generateQuizSession } from './utils/quizEngine';
+import {
+  filterQuestionsForTeam,
+  generateQuizSession,
+  getTeamQuizConfig
+} from './utils/quizEngine';
 import {
   auth,
   db,
   DEFAULT_QUIZ_CONFIG,
   OperationType,
+  AccountDeletedError,
   handleFirestoreError,
   ensureUserProfileExists,
   signOutUser,
   updateUserProfileInFirestore,
   setUserRoleInFirestore,
+  deletePlayerFromFirestore,
   saveQuestionToFirestore,
   toggleQuestionPriorityInFirestore,
   deleteQuestionFromFirestore,
   saveAttemptToFirestore,
   saveQuizConfigToFirestore,
   removeTopicLabelFromFirestore,
+  createTeamInFirestore,
+  updateTeamInFirestore,
+  deleteTeamFromFirestore,
   toIsoString
 } from './lib/firebase';
 import { AuthScreen } from './components/AuthScreen';
@@ -27,6 +36,7 @@ import { ProfileModal } from './components/ProfileModal';
 import { PlayerHomeView } from './components/PlayerHomeView';
 import { QuizSession } from './components/QuizSession';
 import { CoachAnalyticsView } from './components/CoachAnalyticsView';
+import { CoachTeamsView } from './components/CoachTeamsView';
 import { QuestionBankView } from './components/QuestionBankView';
 import { QuestionEditorModal } from './components/QuestionEditorModal';
 import { PlayerDetailModal } from './components/PlayerDetailModal';
@@ -35,22 +45,33 @@ import { QuizConfigModal } from './components/QuizConfigModal';
 import { Play, ClipboardList, SlidersHorizontal } from 'lucide-react';
 
 type TabType = 'quiz' | 'coach';
-type CoachSubTab = 'analytics' | 'questions';
+type CoachSubTab = 'analytics' | 'teams' | 'questions';
 
 export default function App() {
   const [authReady, setAuthReady] = useState(false);
   const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
   const [profileReady, setProfileReady] = useState(false);
+  const [authNotice, setAuthNotice] = useState<string | null>(null);
 
   const [questions, setQuestions] = useState<Question[]>([]);
   const [players, setPlayers] = useState<Player[]>([]);
   const [attempts, setAttempts] = useState<QuizAttempt[]>([]);
+  const [teams, setTeams] = useState<Team[]>([]);
   const [quizConfig, setQuizConfig] = useState<QuizConfig>(DEFAULT_QUIZ_CONFIG);
 
   const [activeTab, setActiveTab] = useState<TabType>('quiz');
   const [coachSubTab, setCoachSubTab] = useState<CoachSubTab>('analytics');
+  const [playerSelectedTeamId, setPlayerSelectedTeamId] = useState<string | null>(null);
+  const [coachSelectedTeamId, setCoachSelectedTeamId] = useState<string | null>(null);
+  const [coachAnalyticsTeamFilter, setCoachAnalyticsTeamFilter] = useState<string>('all');
+  const [coachQuestionsTeamFilter, setCoachQuestionsTeamFilter] = useState<string>('all');
+
   const [isQuizActive, setIsQuizActive] = useState<boolean>(false);
   const [activeQuizQuestions, setActiveQuizQuestions] = useState<Question[]>([]);
+  const [activeQuizTeamId, setActiveQuizTeamId] = useState<string | undefined>(undefined);
+  const [activeQuizTimeSeconds, setActiveQuizTimeSeconds] = useState<number>(
+    DEFAULT_QUIZ_CONFIG.timePerQuestionSeconds
+  );
 
   // Modals
   const [isEditorOpen, setIsEditorOpen] = useState(false);
@@ -60,6 +81,7 @@ export default function App() {
   const [isResultsOpen, setIsResultsOpen] = useState(false);
   const [latestAttempt, setLatestAttempt] = useState<QuizAttempt | null>(null);
   const [isConfigOpen, setIsConfigOpen] = useState(false);
+  const [configTargetTeam, setConfigTargetTeam] = useState<Team | null>(null);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
 
   // Listen to Firebase Auth state
@@ -72,19 +94,29 @@ export default function App() {
         setProfileReady(false);
         try {
           await ensureUserProfileExists(user);
-        } catch (err) {
-          console.error('Failed to ensure profile:', err);
-        } finally {
+          setAuthNotice(null);
           setProfileReady(true);
+        } catch (err) {
+          if (err instanceof AccountDeletedError) {
+            setAuthNotice(err.message);
+          } else {
+            console.error('Failed to ensure profile:', err);
+            setProfileReady(true);
+          }
         }
       } else {
         setProfileReady(false);
         setPlayers([]);
         setQuestions([]);
         setAttempts([]);
+        setTeams([]);
         setQuizConfig(DEFAULT_QUIZ_CONFIG);
         setIsQuizActive(false);
         setActiveTab('quiz');
+        setPlayerSelectedTeamId(null);
+        setCoachSelectedTeamId(null);
+        setCoachAnalyticsTeamFilter('all');
+        setCoachQuestionsTeamFilter('all');
       }
     });
 
@@ -95,8 +127,9 @@ export default function App() {
   useEffect(() => {
     if (!firebaseUser || !profileReady) return;
 
+    const usersQuery = query(collection(db, 'users'), where('role', 'in', ['player', 'coach']));
     const unsubUsers = onSnapshot(
-      collection(db, 'users'),
+      usersQuery,
       snapshot => {
         const list: Player[] = snapshot.docs.map(docSnap => {
           const data = docSnap.data();
@@ -115,8 +148,12 @@ export default function App() {
       }
     );
 
-    const unsubQuestions = onSnapshot(
+    const questionsQuery = query(
       collection(db, 'questions'),
+      where('isPriorityFocus', 'in', [true, false])
+    );
+    const unsubQuestions = onSnapshot(
+      questionsQuery,
       snapshot => {
         const list: Question[] = snapshot.docs
           .map(docSnap => {
@@ -128,6 +165,7 @@ export default function App() {
               keyConcept: String(data.keyConcept || ''),
               isPriorityFocus: Boolean(data.isPriorityFocus),
               tags: Array.isArray(data.tags) ? data.tags.map(String) : [],
+              teamIds: Array.isArray(data.teamIds) ? data.teamIds.map(String) : undefined,
               explanation: String(data.explanation || ''),
               options: Array.isArray(data.options) ? data.options : [],
               diagram: data.diagram || undefined,
@@ -143,8 +181,9 @@ export default function App() {
       }
     );
 
+    const attemptsQuery = query(collection(db, 'attempts'), where('totalQuestions', '>', 0));
     const unsubAttempts = onSnapshot(
-      collection(db, 'attempts'),
+      attemptsQuery,
       snapshot => {
         const list: QuizAttempt[] = snapshot.docs
           .map(docSnap => {
@@ -152,6 +191,7 @@ export default function App() {
             return {
               id: docSnap.id,
               playerId: String(data.playerId || ''),
+              teamId: data.teamId ? String(data.teamId) : undefined,
               timestamp: String(data.timestamp || toIsoString(data.createdAt)),
               weekKey: String(data.weekKey || ''),
               totalScore: Number(data.totalScore || 0),
@@ -167,6 +207,45 @@ export default function App() {
       },
       error => {
         handleFirestoreError(error, OperationType.LIST, 'attempts');
+      }
+    );
+
+    const teamsQuery = query(collection(db, 'teams'), where('questionCount', '>=', 1));
+    const unsubTeams = onSnapshot(
+      teamsQuery,
+      snapshot => {
+        const list: Team[] = snapshot.docs
+          .map(docSnap => {
+            const data = docSnap.data();
+            return {
+              id: docSnap.id,
+              name: String(data.name || ''),
+              playerIds: Array.isArray(data.playerIds) ? data.playerIds.map(String) : [],
+              questionCount: Number(data.questionCount || DEFAULT_QUIZ_CONFIG.questionCount),
+              timePerQuestionSeconds: Number(
+                data.timePerQuestionSeconds || DEFAULT_QUIZ_CONFIG.timePerQuestionSeconds
+              ),
+              prioritizeFocusQuestions:
+                data.prioritizeFocusQuestions !== undefined
+                  ? Boolean(data.prioritizeFocusQuestions)
+                  : DEFAULT_QUIZ_CONFIG.prioritizeFocusQuestions,
+              ensureDiverseTopics:
+                data.ensureDiverseTopics !== undefined
+                  ? Boolean(data.ensureDiverseTopics)
+                  : DEFAULT_QUIZ_CONFIG.ensureDiverseTopics,
+              selectedTags: Array.isArray(data.selectedTags)
+                ? data.selectedTags.map(String)
+                : undefined,
+              createdBy: String(data.createdBy || ''),
+              createdAt: toIsoString(data.createdAt),
+              updatedAt: toIsoString(data.updatedAt)
+            } as Team;
+          })
+          .sort((a, b) => a.name.localeCompare(b.name, 'de'));
+        setTeams(list);
+      },
+      error => {
+        handleFirestoreError(error, OperationType.LIST, 'teams');
       }
     );
 
@@ -198,15 +277,30 @@ export default function App() {
       }
     );
 
+    const unsubDeleted = onSnapshot(
+      doc(db, 'deleted_users', firebaseUser.uid),
+      docSnap => {
+        if (docSnap.exists()) {
+          setAuthNotice('Dieses Konto wurde vom Trainer gelöscht.');
+          void signOutUser();
+        }
+      },
+      error => {
+        handleFirestoreError(error, OperationType.GET, `deleted_users/${firebaseUser.uid}`);
+      }
+    );
+
     return () => {
       unsubUsers();
       unsubQuestions();
       unsubAttempts();
+      unsubTeams();
       unsubConfig();
+      unsubDeleted();
     };
   }, [firebaseUser, profileReady]);
 
-  if (!authReady) {
+  if (!authReady || (firebaseUser && !profileReady)) {
     return (
       <div className="min-h-screen bg-[#09090B] flex items-center justify-center text-xs text-zinc-400">
         Laden...
@@ -215,7 +309,7 @@ export default function App() {
   }
 
   if (!firebaseUser) {
-    return <AuthScreen />;
+    return <AuthScreen notice={authNotice} onClearNotice={() => setAuthNotice(null)} />;
   }
 
   const fallbackPlayer: Player = {
@@ -229,17 +323,38 @@ export default function App() {
   const currentPlayer = players.find(p => p.id === firebaseUser.uid) || fallbackPlayer;
   const isCoach = currentPlayer.role === 'coach';
 
+  const selectableTeams = isCoach
+    ? teams
+    : teams.filter(t => t.playerIds.includes(currentPlayer.id));
+
+  const activePlayerTeam = isCoach
+    ? (playerSelectedTeamId ? teams.find(t => t.id === playerSelectedTeamId) || null : null)
+    : (selectableTeams.find(t => t.id === playerSelectedTeamId) || selectableTeams[0] || null);
+
+  const effectivePlayerConfig = getTeamQuizConfig(activePlayerTeam, quizConfig);
+  const effectivePlayerQuestions = activePlayerTeam
+    ? filterQuestionsForTeam(questions, activePlayerTeam.id)
+    : teams.length > 0
+    ? filterQuestionsForTeam(questions, null)
+    : questions;
+
   const handleStartQuiz = () => {
-    const sessionQuestions = generateQuizSession(questions, quizConfig);
+    const sessionQuestions = generateQuizSession(
+      effectivePlayerQuestions,
+      effectivePlayerConfig
+    );
     if (sessionQuestions.length === 0) return;
     setActiveQuizQuestions(sessionQuestions);
+    setActiveQuizTeamId(activePlayerTeam?.id);
+    setActiveQuizTimeSeconds(effectivePlayerConfig.timePerQuestionSeconds);
     setIsQuizActive(true);
   };
 
   const handleFinishQuiz = async (attempt: QuizAttempt) => {
     const normalizedAttempt: QuizAttempt = {
       ...attempt,
-      playerId: firebaseUser.uid
+      playerId: firebaseUser.uid,
+      ...(activeQuizTeamId ? { teamId: activeQuizTeamId } : {})
     };
     setLatestAttempt(normalizedAttempt);
     setIsQuizActive(false);
@@ -269,7 +384,7 @@ export default function App() {
 
   const handleRemoveTopicLabel = async (tag: string) => {
     if (!isCoach) return;
-    await removeTopicLabelFromFirestore(tag, allKnownTags, questions, quizConfig);
+    await removeTopicLabelFromFirestore(tag, allKnownTags, questions, quizConfig, teams);
   };
 
   const handleDeleteQuestion = async (questionId: string) => {
@@ -282,15 +397,30 @@ export default function App() {
     await toggleQuestionPriorityInFirestore(questionId, !target.isPriorityFocus);
   };
 
+  const openConfigModalForTeam = (team: Team | null) => {
+    setConfigTargetTeam(team);
+    setIsConfigOpen(true);
+  };
+
   const handleSaveConfig = async (nextConfig: QuizConfig) => {
+    if (!isCoach) return;
+    if (configTargetTeam) {
+      await updateTeamInFirestore(configTargetTeam.id, {
+        questionCount: nextConfig.questionCount,
+        timePerQuestionSeconds: nextConfig.timePerQuestionSeconds,
+        prioritizeFocusQuestions: nextConfig.prioritizeFocusQuestions,
+        ensureDiverseTopics: nextConfig.ensureDiverseTopics,
+        selectedTags: nextConfig.selectedTags || null
+      });
+      return;
+    }
+
     const mergedConfig: QuizConfig = {
       ...nextConfig,
       topicLabels: managedLabels
     };
     setQuizConfig(mergedConfig);
-    if (isCoach) {
-      await saveQuizConfigToFirestore(mergedConfig);
-    }
+    await saveQuizConfigToFirestore(mergedConfig);
   };
 
   const handleSelectPlayerDetail = (player: Player) => {
@@ -301,6 +431,13 @@ export default function App() {
   const handleToggleMemberRole = async (target: Player, nextRole: 'player' | 'coach') => {
     await setUserRoleInFirestore(target, nextRole);
     setSelectedPlayerForDetail(prev => (prev && prev.id === target.id ? { ...prev, role: nextRole } : prev));
+  };
+
+  const handleDeletePlayer = async (target: Player) => {
+    if (!isCoach || target.id === firebaseUser.uid) return;
+    await deletePlayerFromFirestore(target, attempts, firebaseUser.uid, teams);
+    setIsPlayerDetailOpen(false);
+    setSelectedPlayerForDetail(null);
   };
 
   const effectiveTab: TabType = activeTab === 'coach' && !isCoach ? 'quiz' : activeTab;
@@ -369,7 +506,7 @@ export default function App() {
           <QuizSession
             questions={activeQuizQuestions}
             player={currentPlayer}
-            timePerQuestion={quizConfig.timePerQuestionSeconds}
+            timePerQuestion={activeQuizTimeSeconds}
             onFinishQuiz={handleFinishQuiz}
             onExit={() => setIsQuizActive(false)}
           />
@@ -378,11 +515,15 @@ export default function App() {
             player={currentPlayer}
             players={players}
             attempts={attempts}
-            quizConfig={quizConfig}
-            questionCount={questions.length}
+            teams={teams}
+            selectableTeams={selectableTeams}
+            activeTeam={activePlayerTeam}
+            onSelectTeamId={setPlayerSelectedTeamId}
+            quizConfig={effectivePlayerConfig}
+            questionCount={effectivePlayerQuestions.length}
             isCoach={isCoach}
             onStartQuiz={handleStartQuiz}
-            onOpenConfig={() => setIsConfigOpen(true)}
+            onOpenConfig={() => openConfigModalForTeam(activePlayerTeam)}
             onSelectPlayerDetail={handleSelectPlayerDetail}
             onGoToCoachQuestions={() => {
               setActiveTab('coach');
@@ -396,7 +537,7 @@ export default function App() {
               <div>
                 <h1 className="text-xl font-bold text-white">Trainer</h1>
                 <p className="text-xs text-zinc-400">
-                  Team-Wissenslücken, Spielertrends und Fragenkatalog
+                  Statistik, gemeinsame Teams und Fragenkatalog
                 </p>
               </div>
 
@@ -413,6 +554,16 @@ export default function App() {
                     Statistik
                   </button>
                   <button
+                    onClick={() => setCoachSubTab('teams')}
+                    className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors min-h-[36px] whitespace-nowrap ${
+                      coachSubTab === 'teams'
+                        ? 'bg-red-700 text-white shadow-xs'
+                        : 'text-zinc-400 hover:text-zinc-200'
+                    }`}
+                  >
+                    Teams ({teams.length})
+                  </button>
+                  <button
                     onClick={() => setCoachSubTab('questions')}
                     className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors min-h-[36px] whitespace-nowrap ${
                       coachSubTab === 'questions'
@@ -425,7 +576,22 @@ export default function App() {
                 </div>
 
                 <button
-                  onClick={() => setIsConfigOpen(true)}
+                  onClick={() => {
+                    if (coachSubTab === 'teams') {
+                      const activeCoachTeam =
+                        teams.find(t => t.id === coachSelectedTeamId) || teams[0] || null;
+                      openConfigModalForTeam(activeCoachTeam);
+                    } else if (
+                      coachSubTab === 'analytics' &&
+                      coachAnalyticsTeamFilter !== 'all'
+                    ) {
+                      const filteredTeam =
+                        teams.find(t => t.id === coachAnalyticsTeamFilter) || null;
+                      openConfigModalForTeam(filteredTeam);
+                    } else {
+                      openConfigModalForTeam(null);
+                    }
+                  }}
                   className="p-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-300 hover:bg-zinc-800 hover:text-white min-h-[40px] min-w-[40px] flex items-center justify-center transition-colors"
                   aria-label="Quiz-Einstellungen"
                   title="Quiz-Einstellungen"
@@ -440,12 +606,35 @@ export default function App() {
                 players={players}
                 questions={questions}
                 attempts={attempts}
+                teams={teams}
+                selectedTeamId={coachAnalyticsTeamFilter}
+                onSelectTeamId={setCoachAnalyticsTeamFilter}
+                onOpenTeamConfig={team => openConfigModalForTeam(team)}
                 onTogglePriorityFocus={handleTogglePriorityFocus}
                 onSelectPlayerDetail={handleSelectPlayerDetail}
+              />
+            ) : coachSubTab === 'teams' ? (
+              <CoachTeamsView
+                teams={teams}
+                players={players}
+                questions={questions}
+                selectedTeamId={coachSelectedTeamId}
+                onSelectTeamId={setCoachSelectedTeamId}
+                onCreateTeam={name => createTeamInFirestore(name, firebaseUser.uid, quizConfig)}
+                onUpdateTeam={(teamId, updates) => updateTeamInFirestore(teamId, updates)}
+                onDeleteTeam={teamId => deleteTeamFromFirestore(teamId, questions)}
+                onOpenTeamConfig={team => openConfigModalForTeam(team)}
+                onGoToTeamQuestions={teamId => {
+                  setCoachQuestionsTeamFilter(teamId);
+                  setCoachSubTab('questions');
+                }}
               />
             ) : (
               <QuestionBankView
                 questions={questions}
+                teams={teams}
+                selectedTeamFilter={coachQuestionsTeamFilter}
+                onChangeTeamFilter={setCoachQuestionsTeamFilter}
                 topicLabels={allKnownTags}
                 onAddQuestion={() => {
                   setEditingQuestion(null);
@@ -509,6 +698,14 @@ export default function App() {
           }}
           onSave={handleSaveQuestion}
           existingTags={allKnownTags}
+          teams={teams}
+          defaultTeamIds={
+            coachSubTab === 'questions' &&
+            coachQuestionsTeamFilter !== 'all' &&
+            coachQuestionsTeamFilter !== 'global'
+              ? [coachQuestionsTeamFilter]
+              : []
+          }
           onRemoveTopicLabel={handleRemoveTopicLabel}
         />
       )}
@@ -525,6 +722,7 @@ export default function App() {
         viewerIsCoach={isCoach}
         currentUserId={currentPlayer.id}
         onToggleRole={handleToggleMemberRole}
+        onDeletePlayer={handleDeletePlayer}
       />
 
       <QuizResultsModal
@@ -545,9 +743,13 @@ export default function App() {
 
       {isCoach && (
         <QuizConfigModal
-          config={quizConfig}
+          config={configTargetTeam ? getTeamQuizConfig(configTargetTeam, quizConfig) : quizConfig}
+          targetTeamName={configTargetTeam?.name || null}
           isOpen={isConfigOpen}
-          onClose={() => setIsConfigOpen(false)}
+          onClose={() => {
+            setIsConfigOpen(false);
+            setConfigTargetTeam(null);
+          }}
           onSave={handleSaveConfig}
           availableTags={allKnownTags}
         />

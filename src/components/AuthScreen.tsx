@@ -8,6 +8,8 @@ import {
 
 interface AuthScreenProps {
   onAuthSuccess?: () => void;
+  notice?: string | null;
+  onClearNotice?: () => void;
 }
 
 function getFriendlyAuthError(err: unknown, mode: 'login' | 'register'): string {
@@ -17,6 +19,9 @@ function getFriendlyAuthError(err: unknown, mode: 'login' | 'register'): string 
       : '';
   const msg = err instanceof Error ? err.message : String(err);
 
+  if (err instanceof Error && err.name === 'AccountDeletedError') {
+    return err.message;
+  }
   if (code === 'auth/operation-not-allowed' || msg.includes('operation-not-allowed')) {
     return 'E-Mail/Passwort-Anmeldung ist in der Firebase Console noch nicht aktiviert. Bitte den Trainer, dies unter Authentication > Sign-in method zu aktivieren.';
   }
@@ -42,7 +47,7 @@ function getFriendlyAuthError(err: unknown, mode: 'login' | 'register'): string 
     : 'Registrierung fehlgeschlagen. Bitte erneut versuchen.';
 }
 
-export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess }) => {
+export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, notice, onClearNotice }) => {
   const [isRegisterMode, setIsRegisterMode] = useState<boolean>(() => isRegistrationRoute());
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -52,6 +57,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess }) => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    onClearNotice?.();
 
     const usernameError = validateUsername(username);
     if (usernameError) {
@@ -157,12 +163,12 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess }) => {
             />
           </div>
 
-          {error && (
+          {(error || notice) && (
             <div
               role="alert"
               className="text-xs text-red-200 bg-red-950/70 border border-red-800 rounded-xl px-3.5 py-2.5"
             >
-              {error}
+              {error || notice}
             </div>
           )}
 

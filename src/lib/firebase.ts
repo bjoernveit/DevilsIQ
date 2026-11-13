@@ -8,6 +8,10 @@ import {
 } from 'firebase/auth';
 import {
   getFirestore,
+  collection,
+  query,
+  where,
+  getDocs,
   doc,
   getDoc,
   getDocFromServer,
@@ -25,6 +29,7 @@ import {
   Question,
   QuizAttempt,
   QuizConfig,
+  Team,
   UserRole
 } from '../types/basketball';
 import { INITIAL_QUESTIONS, ALL_TAGS } from '../data/initialData';
@@ -197,11 +202,31 @@ export async function registerWithUsername(username: string, password: string): 
   return user;
 }
 
+export class AccountDeletedError extends Error {
+  constructor() {
+    super('Dieses Konto wurde vom Trainer gelöscht.');
+    this.name = 'AccountDeletedError';
+  }
+}
+
 /**
  * Creates a Firestore profile for an authenticated user if missing.
  * First account ever created becomes Coach atomically via team_meta/bootstrap.
  */
 export async function ensureUserProfileExists(user: User, preferredUsername?: string): Promise<void> {
+  const deletedRef = doc(db, 'deleted_users', user.uid);
+  let deletedSnap;
+  try {
+    deletedSnap = await getDoc(deletedRef);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, `deleted_users/${user.uid}`);
+  }
+
+  if (deletedSnap.exists()) {
+    await firebaseSignOut(auth);
+    throw new AccountDeletedError();
+  }
+
   const userRef = doc(db, 'users', user.uid);
   let existingSnap;
   try {
@@ -360,6 +385,76 @@ export async function setUserRoleInFirestore(
   }
 }
 
+export async function deletePlayerFromFirestore(
+  targetPlayer: Player,
+  knownAttempts: QuizAttempt[],
+  coachUid: string,
+  teams: Team[] = []
+): Promise<void> {
+  const targetUid = sanitizeId(targetPlayer.id);
+  if (!targetUid || targetUid === coachUid) {
+    throw new Error('Das eigene Trainer-Konto kann nicht gelöscht werden.');
+  }
+
+  let queriedAttemptIds: string[] = [];
+  try {
+    const attemptsQuery = query(collection(db, 'attempts'), where('playerId', '==', targetPlayer.id));
+    const snapshot = await getDocs(attemptsQuery);
+    queriedAttemptIds = snapshot.docs.map(d => sanitizeId(d.id)).filter(Boolean);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, 'attempts');
+  }
+
+  const localAttemptIds = knownAttempts
+    .filter(a => a.playerId === targetPlayer.id)
+    .map(a => sanitizeId(a.id))
+    .filter(Boolean);
+
+  const attemptIdsToDelete = Array.from(new Set([...queriedAttemptIds, ...localAttemptIds]));
+
+  const primaryBatch = writeBatch(db);
+  primaryBatch.set(doc(db, 'deleted_users', targetUid), {
+    uid: targetUid,
+    deletedBy: coachUid,
+    deletedAt: serverTimestamp()
+  });
+  primaryBatch.delete(doc(db, 'users', targetUid));
+  primaryBatch.delete(doc(db, 'coaches', targetUid));
+
+  for (const team of teams) {
+    if (team.playerIds.includes(targetPlayer.id)) {
+      primaryBatch.update(doc(db, 'teams', sanitizeId(team.id)), {
+        playerIds: team.playerIds.filter(id => id !== targetPlayer.id).slice(0, 100),
+        updatedAt: serverTimestamp()
+      });
+    }
+  }
+
+  const firstChunk = attemptIdsToDelete.slice(0, 360);
+  for (const attemptId of firstChunk) {
+    primaryBatch.delete(doc(db, 'attempts', attemptId));
+  }
+
+  try {
+    await primaryBatch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `users/${targetUid}`);
+  }
+
+  for (let i = 360; i < attemptIdsToDelete.length; i += 400) {
+    const chunk = attemptIdsToDelete.slice(i, i + 400);
+    const batch = writeBatch(db);
+    for (const attemptId of chunk) {
+      batch.delete(doc(db, 'attempts', attemptId));
+    }
+    try {
+      await batch.commit();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, 'attempts');
+    }
+  }
+}
+
 export async function saveQuestionToFirestore(
   question: Question,
   isUpdate: boolean,
@@ -373,6 +468,10 @@ export async function saveQuestionToFirestore(
     .filter(Boolean)
     .slice(0, 10);
 
+  const cleanTeamIds = Array.from(
+    new Set((question.teamIds || []).map(id => sanitizeId(id)).filter(Boolean))
+  ).slice(0, 30);
+
   const cleanOptions = stripUndefined(question.options.slice(0, 6));
 
   if (isUpdate) {
@@ -382,6 +481,7 @@ export async function saveQuestionToFirestore(
       keyConcept: (question.keyConcept || question.title).trim().slice(0, 160),
       isPriorityFocus: Boolean(question.isPriorityFocus),
       tags: cleanTags,
+      teamIds: cleanTeamIds.length > 0 ? cleanTeamIds : deleteField(),
       explanation: question.explanation.trim().slice(0, 1000),
       options: cleanOptions,
       diagram: question.diagram ? stripUndefined(question.diagram) : deleteField(),
@@ -408,6 +508,7 @@ export async function saveQuestionToFirestore(
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp()
     };
+    if (cleanTeamIds.length > 0) createPayload.teamIds = cleanTeamIds;
     if (question.diagram) createPayload.diagram = stripUndefined(question.diagram);
     if (question.imageUrl) createPayload.imageUrl = question.imageUrl.slice(0, 500000);
 
@@ -449,7 +550,7 @@ export async function saveAttemptToFirestore(attempt: QuizAttempt): Promise<void
   const attemptId = sanitizeId(attempt.id);
   const path = `attempts/${attemptId}`;
 
-  const payload = {
+  const payload: Record<string, unknown> = {
     id: attemptId,
     playerId: attempt.playerId,
     timestamp: attempt.timestamp.slice(0, 64),
@@ -462,6 +563,10 @@ export async function saveAttemptToFirestore(attempt: QuizAttempt): Promise<void
     answers: stripUndefined(attempt.answers.slice(0, 30)),
     createdAt: serverTimestamp()
   };
+
+  if (attempt.teamId) {
+    payload.teamId = sanitizeId(attempt.teamId);
+  }
 
   try {
     await setDoc(doc(db, 'attempts', attemptId), payload);
@@ -501,7 +606,8 @@ export async function removeTopicLabelFromFirestore(
   tagToRemove: string,
   currentLabels: string[],
   questions: Question[],
-  currentConfig: QuizConfig
+  currentConfig: QuizConfig,
+  teams: Team[] = []
 ): Promise<void> {
   const nextLabels = currentLabels.filter(t => t !== tagToRemove).slice(0, 30);
   const nextSelected = currentConfig.selectedTags?.filter(t => t !== tagToRemove);
@@ -536,9 +642,141 @@ export async function removeTopicLabelFromFirestore(
     }
   }
 
+  for (const team of teams) {
+    if (team.selectedTags && team.selectedTags.includes(tagToRemove)) {
+      const nextTeamTags = team.selectedTags.filter(t => t !== tagToRemove).slice(0, 20);
+      batch.update(doc(db, 'teams', sanitizeId(team.id)), {
+        selectedTags: nextTeamTags.length > 0 ? nextTeamTags : deleteField(),
+        updatedAt: serverTimestamp()
+      });
+    }
+  }
+
   try {
     await batch.commit();
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, 'team_meta/quiz_config');
+  }
+}
+
+export async function createTeamInFirestore(
+  name: string,
+  coachUid: string,
+  defaults: QuizConfig,
+  initialPlayerIds: string[] = []
+): Promise<string> {
+  const cleanName = name.trim().slice(0, 64);
+  if (!cleanName) {
+    throw new Error('Teamname darf nicht leer sein.');
+  }
+  const teamId = sanitizeId(`team-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+  const path = `teams/${teamId}`;
+
+  const cleanPlayerIds = Array.from(
+    new Set(initialPlayerIds.map(id => sanitizeId(id)).filter(Boolean))
+  ).slice(0, 100);
+
+  const payload: Record<string, unknown> = {
+    id: teamId,
+    name: cleanName,
+    playerIds: cleanPlayerIds,
+    questionCount: Math.max(1, Math.min(25, Math.round(defaults.questionCount))),
+    timePerQuestionSeconds: Math.max(5, Math.min(120, Math.round(defaults.timePerQuestionSeconds))),
+    prioritizeFocusQuestions: Boolean(defaults.prioritizeFocusQuestions),
+    ensureDiverseTopics: Boolean(defaults.ensureDiverseTopics),
+    createdBy: coachUid,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp()
+  };
+
+  if (defaults.selectedTags && defaults.selectedTags.length > 0) {
+    payload.selectedTags = defaults.selectedTags.slice(0, 20);
+  }
+
+  try {
+    await setDoc(doc(db, 'teams', teamId), payload);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+
+  return teamId;
+}
+
+export async function updateTeamInFirestore(
+  teamId: string,
+  updates: {
+    name?: string;
+    playerIds?: string[];
+    questionCount?: number;
+    timePerQuestionSeconds?: number;
+    prioritizeFocusQuestions?: boolean;
+    ensureDiverseTopics?: boolean;
+    selectedTags?: string[] | null;
+  }
+): Promise<void> {
+  const tId = sanitizeId(teamId);
+  const path = `teams/${tId}`;
+  const payload: Record<string, unknown> = {
+    updatedAt: serverTimestamp()
+  };
+
+  if (updates.name !== undefined) {
+    const cleanName = updates.name.trim().slice(0, 64);
+    if (!cleanName) throw new Error('Teamname darf nicht leer sein.');
+    payload.name = cleanName;
+  }
+  if (updates.playerIds !== undefined) {
+    payload.playerIds = Array.from(
+      new Set(updates.playerIds.map(id => sanitizeId(id)).filter(Boolean))
+    ).slice(0, 100);
+  }
+  if (updates.questionCount !== undefined) {
+    payload.questionCount = Math.max(1, Math.min(25, Math.round(updates.questionCount)));
+  }
+  if (updates.timePerQuestionSeconds !== undefined) {
+    payload.timePerQuestionSeconds = Math.max(5, Math.min(120, Math.round(updates.timePerQuestionSeconds)));
+  }
+  if (updates.prioritizeFocusQuestions !== undefined) {
+    payload.prioritizeFocusQuestions = Boolean(updates.prioritizeFocusQuestions);
+  }
+  if (updates.ensureDiverseTopics !== undefined) {
+    payload.ensureDiverseTopics = Boolean(updates.ensureDiverseTopics);
+  }
+  if (updates.selectedTags !== undefined) {
+    payload.selectedTags =
+      updates.selectedTags && updates.selectedTags.length > 0
+        ? updates.selectedTags.slice(0, 20)
+        : deleteField();
+  }
+
+  try {
+    await updateDoc(doc(db, 'teams', tId), payload);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function deleteTeamFromFirestore(
+  teamId: string,
+  questions: Question[]
+): Promise<void> {
+  const tId = sanitizeId(teamId);
+  const batch = writeBatch(db);
+  batch.delete(doc(db, 'teams', tId));
+
+  for (const q of questions) {
+    if (q.teamIds && q.teamIds.includes(tId)) {
+      const nextTeamIds = q.teamIds.filter(id => id !== tId);
+      batch.update(doc(db, 'questions', sanitizeId(q.id)), {
+        teamIds: nextTeamIds.length > 0 ? nextTeamIds.slice(0, 30) : deleteField(),
+        updatedAt: serverTimestamp()
+      });
+    }
+  }
+
+  try {
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `teams/${tId}`);
   }
 }

@@ -8,6 +8,7 @@ interface QuizConfigModalProps {
   onClose: () => void;
   onSave: (config: QuizConfig) => void;
   availableTags: string[];
+  targetTeamName?: string | null;
 }
 
 export const QuizConfigModal: React.FC<QuizConfigModalProps> = ({
@@ -15,7 +16,8 @@ export const QuizConfigModal: React.FC<QuizConfigModalProps> = ({
   isOpen,
   onClose,
   onSave,
-  availableTags
+  availableTags,
+  targetTeamName
 }) => {
   const [questionCount, setQuestionCount] = React.useState(config.questionCount);
   const [timePerQuestion, setTimePerQuestion] = React.useState(config.timePerQuestionSeconds);
@@ -54,7 +56,16 @@ export const QuizConfigModal: React.FC<QuizConfigModalProps> = ({
     <div className="fixed inset-0 z-50 overflow-y-auto bg-black/75 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6">
       <div className="relative w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-800">
-          <h2 className="text-base font-bold text-white">Quiz-Einstellungen</h2>
+          <div className="min-w-0">
+            <h2 className="text-base font-bold text-white truncate">
+              {targetTeamName ? `Einstellungen · ${targetTeamName}` : 'Quiz-Einstellungen'}
+            </h2>
+            {targetTeamName && (
+              <p className="text-[11px] text-zinc-400">
+                Gilt nur für dieses Team
+              </p>
+            )}
+          </div>
           <button
             onClick={onClose}
             className="p-2 text-zinc-400 hover:text-white rounded-lg min-h-[40px] min-w-[40px] flex items-center justify-center"

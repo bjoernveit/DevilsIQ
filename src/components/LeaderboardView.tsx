@@ -1,11 +1,13 @@
-import React, { useState } from 'react';
-import { Player, QuizAttempt } from '../types/basketball';
+import React, { useState, useEffect } from 'react';
+import { Player, QuizAttempt, Team } from '../types/basketball';
 import { calculateWeeklyLeaderboard, getWeekKey } from '../utils/quizEngine';
 
 interface LeaderboardViewProps {
   players: Player[];
   attempts: QuizAttempt[];
   currentPlayerId: string;
+  activeTeam?: Team | null;
+  teams?: Team[];
   onSelectPlayerDetail?: (player: Player) => void;
   embedded?: boolean;
 }
@@ -14,19 +16,34 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
   players,
   attempts,
   currentPlayerId,
+  activeTeam = null,
+  teams = [],
   onSelectPlayerDetail,
   embedded = false
 }) => {
   const currentWeekKey = getWeekKey();
   const [selectedWeek, setSelectedWeek] = useState<string>(currentWeekKey);
   const [filterMode, setFilterMode] = useState<'all' | 'completed' | 'pending'>('all');
+  const [scopeMode, setScopeMode] = useState<'team' | 'club'>(activeTeam ? 'team' : 'club');
 
-  const leaderboardData = calculateWeeklyLeaderboard(players, attempts, selectedWeek);
+  useEffect(() => {
+    setScopeMode(activeTeam ? 'team' : 'club');
+  }, [activeTeam?.id]);
+
+  const isTeamScoped = Boolean(activeTeam && scopeMode === 'team');
+  const scopedPlayers = isTeamScoped && activeTeam
+    ? players.filter(p => activeTeam.playerIds.includes(p.id))
+    : players;
+  const scopedAttempts = isTeamScoped && activeTeam
+    ? attempts.filter(a => !a.teamId || a.teamId === activeTeam.id)
+    : attempts;
+
+  const leaderboardData = calculateWeeklyLeaderboard(scopedPlayers, scopedAttempts, selectedWeek);
   const availableWeeks = Array.from(
-    new Set([currentWeekKey, ...attempts.map(a => a.weekKey)])
+    new Set([currentWeekKey, ...scopedAttempts.map(a => a.weekKey)])
   ).sort().reverse();
 
-  const totalPlayers = players.length;
+  const totalPlayers = scopedPlayers.length;
   const completedPlayers = leaderboardData.filter(d => d.hasCompletedThisWeek).length;
 
   const filteredLeaderboard = leaderboardData.filter(item => {
@@ -42,11 +59,11 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
         <div>
           {embedded ? (
             <h2 className="text-base font-bold text-white">
-              Wochen-Rangliste
+              Wochen-Rangliste{isTeamScoped && activeTeam ? ` · ${activeTeam.name}` : ''}
             </h2>
           ) : (
             <h1 className="text-xl font-bold text-white">
-              Wochen-Rangliste
+              Wochen-Rangliste{isTeamScoped && activeTeam ? ` · ${activeTeam.name}` : ''}
             </h1>
           )}
           <p className="text-xs text-zinc-400 mt-0.5 tabular-nums">
@@ -72,32 +89,57 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
         </div>
       </div>
 
-      {/* Filter Segmented Control */}
-      <div className="inline-flex items-center gap-1 p-1 bg-zinc-900 border border-zinc-800 rounded-xl">
-        <button
-          onClick={() => setFilterMode('all')}
-          className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors min-h-[36px] whitespace-nowrap ${
-            filterMode === 'all' ? 'bg-red-700 text-white shadow-xs' : 'text-zinc-400 hover:text-zinc-200'
-          }`}
-        >
-          Alle ({totalPlayers})
-        </button>
-        <button
-          onClick={() => setFilterMode('completed')}
-          className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors min-h-[36px] whitespace-nowrap ${
-            filterMode === 'completed' ? 'bg-red-700 text-white shadow-xs' : 'text-zinc-400 hover:text-zinc-200'
-          }`}
-        >
-          Fertig ({completedPlayers})
-        </button>
-        <button
-          onClick={() => setFilterMode('pending')}
-          className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors min-h-[36px] whitespace-nowrap ${
-            filterMode === 'pending' ? 'bg-red-700 text-white shadow-xs' : 'text-zinc-400 hover:text-zinc-200'
-          }`}
-        >
-          Offen ({totalPlayers - completedPlayers})
-        </button>
+      {/* Filter & Team Scope Segmented Controls */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="inline-flex items-center gap-1 p-1 bg-zinc-900 border border-zinc-800 rounded-xl">
+          <button
+            onClick={() => setFilterMode('all')}
+            className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors min-h-[36px] whitespace-nowrap ${
+              filterMode === 'all' ? 'bg-red-700 text-white shadow-xs' : 'text-zinc-400 hover:text-zinc-200'
+            }`}
+          >
+            Alle ({totalPlayers})
+          </button>
+          <button
+            onClick={() => setFilterMode('completed')}
+            className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors min-h-[36px] whitespace-nowrap ${
+              filterMode === 'completed' ? 'bg-red-700 text-white shadow-xs' : 'text-zinc-400 hover:text-zinc-200'
+            }`}
+          >
+            Fertig ({completedPlayers})
+          </button>
+          <button
+            onClick={() => setFilterMode('pending')}
+            className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors min-h-[36px] whitespace-nowrap ${
+              filterMode === 'pending' ? 'bg-red-700 text-white shadow-xs' : 'text-zinc-400 hover:text-zinc-200'
+            }`}
+          >
+            Offen ({totalPlayers - completedPlayers})
+          </button>
+        </div>
+
+        {activeTeam && (
+          <div className="inline-flex items-center gap-1 p-1 bg-zinc-900 border border-zinc-800 rounded-xl">
+            <button
+              type="button"
+              onClick={() => setScopeMode('team')}
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors min-h-[36px] whitespace-nowrap ${
+                scopeMode === 'team' ? 'bg-zinc-800 text-white' : 'text-zinc-400 hover:text-zinc-200'
+              }`}
+            >
+              {activeTeam.name}
+            </button>
+            <button
+              type="button"
+              onClick={() => setScopeMode('club')}
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors min-h-[36px] whitespace-nowrap ${
+                scopeMode === 'club' ? 'bg-zinc-800 text-white' : 'text-zinc-400 hover:text-zinc-200'
+              }`}
+            >
+              Alle Spieler
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Flat Standings List */}
@@ -110,6 +152,9 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
           filteredLeaderboard.map((item, index) => {
             const isMe = item.player.id === currentPlayerId;
             const rank = index + 1;
+            const playerTeams = !isTeamScoped
+              ? teams.filter(t => t.playerIds.includes(item.player.id)).map(t => t.name)
+              : [];
 
             return (
               <button
@@ -129,8 +174,9 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
                       {item.player.name}
                       {isMe && <span className="text-red-400 font-normal ml-1.5 text-xs">(Du)</span>}
                     </div>
-                    <div className="text-xs text-zinc-400 tabular-nums">
+                    <div className="text-xs text-zinc-400 tabular-nums truncate">
                       {item.attemptsThisWeek} {item.attemptsThisWeek === 1 ? 'Versuch' : 'Versuche'}
+                      {playerTeams.length > 0 && ` · ${playerTeams.join(', ')}`}
                     </div>
                   </div>
                 </div>

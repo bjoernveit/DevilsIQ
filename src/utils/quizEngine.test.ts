@@ -6,9 +6,11 @@ import {
   calculateQuestionScore,
   calculateTacticalGaps,
   calculateWeeklyLeaderboard,
-  calculateWeeklyTrends
+  calculateWeeklyTrends,
+  filterQuestionsForTeam,
+  getTeamQuizConfig
 } from './quizEngine';
-import { Question, QuizConfig, QuizAttempt, Player } from '../types/basketball';
+import { Question, QuizConfig, QuizAttempt, Player, Team } from '../types/basketball';
 
 const dummyQuestions: Question[] = [
   {
@@ -224,4 +226,68 @@ test('calculateWeeklyTrends aggregates scores and accuracy chronologically', () 
   assert.equal(trends[1].averageScore, 500);
   assert.equal(trends[1].averageAccuracy, 80);
 });
+
+test('filterQuestionsForTeam includes global and team-specific questions while excluding other teams', () => {
+  const mixedQuestions: Question[] = [
+    { ...dummyQuestions[0], id: 'global-1' }, // omitted teamIds -> all teams
+    { ...dummyQuestions[1], id: 'global-2', teamIds: [] }, // empty teamIds -> all teams
+    { ...dummyQuestions[2], id: 'u18-only', teamIds: ['team-u18'] },
+    { ...dummyQuestions[3], id: 'h1-only', teamIds: ['team-h1'] }
+  ];
+
+  const u18Pool = filterQuestionsForTeam(mixedQuestions, 'team-u18').map(q => q.id);
+  assert.deepEqual(u18Pool, ['global-1', 'global-2', 'u18-only']);
+
+  const globalOnlyPool = filterQuestionsForTeam(mixedQuestions, null).map(q => q.id);
+  assert.deepEqual(globalOnlyPool, ['global-1', 'global-2']);
+
+  const session = generateQuizSession(
+    mixedQuestions,
+    {
+      questionCount: 10,
+      timePerQuestionSeconds: 20,
+      prioritizeFocusQuestions: false,
+      ensureDiverseTopics: false
+    },
+    'team-h1'
+  );
+  assert.deepEqual(
+    session.map(q => q.id).sort(),
+    ['global-1', 'global-2', 'h1-only']
+  );
+});
+
+test('getTeamQuizConfig applies team overrides while preserving topicLabels', () => {
+  const fallback: QuizConfig = {
+    questionCount: 5,
+    timePerQuestionSeconds: 24,
+    prioritizeFocusQuestions: true,
+    ensureDiverseTopics: true,
+    topicLabels: ['Offense', 'Defense']
+  };
+
+  const team: Team = {
+    id: 'team-u18',
+    name: 'U18',
+    playerIds: ['p1', 'p2'],
+    questionCount: 8,
+    timePerQuestionSeconds: 15,
+    prioritizeFocusQuestions: false,
+    ensureDiverseTopics: false,
+    selectedTags: ['Defense'],
+    createdBy: 'coach-1',
+    createdAt: '2026-01-01',
+    updatedAt: '2026-01-01'
+  };
+
+  const resolved = getTeamQuizConfig(team, fallback);
+  assert.equal(resolved.questionCount, 8);
+  assert.equal(resolved.timePerQuestionSeconds, 15);
+  assert.equal(resolved.prioritizeFocusQuestions, false);
+  assert.deepEqual(resolved.selectedTags, ['Defense']);
+  assert.deepEqual(resolved.topicLabels, ['Offense', 'Defense']);
+
+  assert.deepEqual(getTeamQuizConfig(null, fallback), fallback);
+});
+
 

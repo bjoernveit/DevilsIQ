@@ -1,4 +1,37 @@
-import { Question, QuizConfig, QuizAttempt, Player, TacticalGapReport } from '../types/basketball';
+import { Question, QuizConfig, QuizAttempt, Player, TacticalGapReport, Team } from '../types/basketball';
+
+/**
+ * Returns questions applicable to a specific team (team-specific + global "all teams" questions).
+ * When no teamId is given, returns global questions (empty/omitted teamIds).
+ */
+export function filterQuestionsForTeam(
+  allQuestions: Question[],
+  teamId?: string | null
+): Question[] {
+  return allQuestions.filter(q => {
+    const isGlobal = !q.teamIds || q.teamIds.length === 0;
+    if (!teamId) return isGlobal;
+    return isGlobal || q.teamIds!.includes(teamId);
+  });
+}
+
+/**
+ * Resolves effective quiz config for a team, falling back to team-wide defaults.
+ */
+export function getTeamQuizConfig(
+  team: Team | null | undefined,
+  fallbackConfig: QuizConfig
+): QuizConfig {
+  if (!team) return fallbackConfig;
+  return {
+    questionCount: team.questionCount,
+    timePerQuestionSeconds: team.timePerQuestionSeconds,
+    prioritizeFocusQuestions: team.prioritizeFocusQuestions,
+    ensureDiverseTopics: team.ensureDiverseTopics,
+    selectedTags: team.selectedTags,
+    topicLabels: fallbackConfig.topicLabels
+  };
+}
 
 /**
  * Returns a standardized ISO week identifier, e.g. "2026-W45"
@@ -22,15 +55,17 @@ export function getWeekKey(dateInput: Date | string = new Date()): string {
  */
 export function generateQuizSession(
   allQuestions: Question[],
-  config: QuizConfig
+  config: QuizConfig,
+  teamId?: string | null
 ): Question[] {
-  if (allQuestions.length === 0) return [];
+  const teamScoped = teamId !== undefined ? filterQuestionsForTeam(allQuestions, teamId) : allQuestions;
+  if (teamScoped.length === 0) return [];
 
   // Filter by selected tags if specified and non-empty
-  let pool = allQuestions;
+  let pool = teamScoped;
   if (config.selectedTags && config.selectedTags.length > 0) {
     const selectedSet = new Set(config.selectedTags);
-    const filtered = allQuestions.filter(q => q.tags.some(t => selectedSet.has(t)));
+    const filtered = teamScoped.filter(q => q.tags.some(t => selectedSet.has(t)));
     if (filtered.length > 0) {
       pool = filtered;
     }

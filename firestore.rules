@@ -45,15 +45,24 @@ service cloud.firestore {
         && data.createdAt is timestamp;
     }
 
+    function isValidDeletedUser(data, userId) {
+      return data.keys().hasAll(['uid', 'deletedBy', 'deletedAt'])
+        && data.keys().hasOnly(['uid', 'deletedBy', 'deletedAt'])
+        && data.uid is string && data.uid == userId && data.uid.size() >= 1 && data.uid.size() <= 128
+        && data.deletedBy is string && data.deletedBy == request.auth.uid && data.deletedBy.size() >= 1 && data.deletedBy.size() <= 128
+        && data.deletedAt is timestamp;
+    }
+
     function isValidQuestion(data, questionId) {
       return data.keys().hasAll(['id', 'title', 'scenario', 'keyConcept', 'isPriorityFocus', 'tags', 'explanation', 'options', 'createdBy', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'title', 'scenario', 'keyConcept', 'isPriorityFocus', 'tags', 'explanation', 'options', 'diagram', 'imageUrl', 'createdBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'title', 'scenario', 'keyConcept', 'isPriorityFocus', 'tags', 'teamIds', 'explanation', 'options', 'diagram', 'imageUrl', 'createdBy', 'createdAt', 'updatedAt'])
         && data.id is string && data.id == questionId && data.id.size() <= 128
         && data.title is string && data.title.size() >= 1 && data.title.size() <= 160
         && data.scenario is string && data.scenario.size() >= 1 && data.scenario.size() <= 1000
         && data.keyConcept is string && data.keyConcept.size() <= 160
         && data.isPriorityFocus is bool
         && data.tags is list && data.tags.size() <= 10 && (data.tags.size() == 0 || data.tags[0] is string)
+        && (!('teamIds' in data) || (data.teamIds is list && data.teamIds.size() <= 30 && (data.teamIds.size() == 0 || data.teamIds[0] is string)))
         && data.explanation is string && data.explanation.size() <= 1000
         && data.options is list && data.options.size() >= 2 && data.options.size() <= 6 && data.options[0] is map
         && (!('diagram' in data) || data.diagram is map)
@@ -65,7 +74,7 @@ service cloud.firestore {
 
     function isValidAttempt(data, attemptId) {
       return data.keys().hasAll(['id', 'playerId', 'timestamp', 'weekKey', 'totalScore', 'correctCount', 'totalQuestions', 'totalTimeSeconds', 'maxStreak', 'answers', 'createdAt'])
-        && data.keys().hasOnly(['id', 'playerId', 'timestamp', 'weekKey', 'totalScore', 'correctCount', 'totalQuestions', 'totalTimeSeconds', 'maxStreak', 'answers', 'createdAt'])
+        && data.keys().hasOnly(['id', 'playerId', 'timestamp', 'weekKey', 'totalScore', 'correctCount', 'totalQuestions', 'totalTimeSeconds', 'maxStreak', 'answers', 'teamId', 'createdAt'])
         && data.id is string && data.id == attemptId && data.id.size() <= 128
         && data.playerId is string && data.playerId == request.auth.uid && data.playerId.size() <= 128
         && data.timestamp is string && data.timestamp.size() <= 64
@@ -76,7 +85,24 @@ service cloud.firestore {
         && data.totalTimeSeconds is int && data.totalTimeSeconds >= 0 && data.totalTimeSeconds <= 3600
         && data.maxStreak is int && data.maxStreak >= 0 && data.maxStreak <= 30
         && data.answers is list && data.answers.size() <= 30
+        && (!('teamId' in data) || (data.teamId is string && data.teamId.size() >= 1 && data.teamId.size() <= 128 && data.teamId.matches('^[a-zA-Z0-9_\\-]+$')))
         && data.createdAt is timestamp;
+    }
+
+    function isValidTeam(data, teamId) {
+      return data.keys().hasAll(['id', 'name', 'playerIds', 'questionCount', 'timePerQuestionSeconds', 'prioritizeFocusQuestions', 'ensureDiverseTopics', 'createdBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'name', 'playerIds', 'questionCount', 'timePerQuestionSeconds', 'prioritizeFocusQuestions', 'ensureDiverseTopics', 'selectedTags', 'createdBy', 'createdAt', 'updatedAt'])
+        && data.id is string && data.id == teamId && data.id.size() >= 1 && data.id.size() <= 128
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 64
+        && data.playerIds is list && data.playerIds.size() <= 100 && (data.playerIds.size() == 0 || data.playerIds[0] is string)
+        && data.questionCount is int && data.questionCount >= 1 && data.questionCount <= 25
+        && data.timePerQuestionSeconds is int && data.timePerQuestionSeconds >= 5 && data.timePerQuestionSeconds <= 120
+        && data.prioritizeFocusQuestions is bool
+        && data.ensureDiverseTopics is bool
+        && (!('selectedTags' in data) || (data.selectedTags is list && data.selectedTags.size() <= 20 && (data.selectedTags.size() == 0 || data.selectedTags[0] is string)))
+        && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
     }
 
     function isValidBootstrap(data) {
@@ -110,6 +136,7 @@ service cloud.firestore {
         && isValidUser(incoming(), userId)
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time
+        && !exists(/databases/$(database)/documents/deleted_users/$(userId))
         && (
           incoming().role == 'player'
           || (
@@ -158,7 +185,7 @@ service cloud.firestore {
     // Playbook Questions
     match /questions/{questionId} {
       allow get: if isSignedIn() && isValidId(questionId);
-      allow list: if isSignedIn() && existing().title.size() > 0;
+      allow list: if isSignedIn() && existing().isPriorityFocus in [true, false];
 
       allow create: if isCoach() && isValidId(questionId)
         && isValidQuestion(incoming(), questionId)
@@ -172,7 +199,7 @@ service cloud.firestore {
         && incoming().createdBy == existing().createdBy
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
-        && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'scenario', 'keyConcept', 'isPriorityFocus', 'tags', 'explanation', 'options', 'diagram', 'imageUrl', 'updatedAt']);
+        && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'scenario', 'keyConcept', 'isPriorityFocus', 'tags', 'teamIds', 'explanation', 'options', 'diagram', 'imageUrl', 'updatedAt']);
 
       allow delete: if isCoach() && isValidId(questionId);
     }
@@ -186,7 +213,8 @@ service cloud.firestore {
 
       allow create: if isSignedIn() && isValidId(attemptId)
         && isValidAttempt(incoming(), attemptId)
-        && incoming().createdAt == request.time;
+        && incoming().createdAt == request.time
+        && !exists(/databases/$(database)/documents/deleted_users/$(request.auth.uid));
 
       allow update: if false;
       allow delete: if isCoach() && isValidId(attemptId);
@@ -218,6 +246,45 @@ service cloud.firestore {
         && incoming().diff(existing()).affectedKeys().hasOnly(['questionCount', 'timePerQuestionSeconds', 'prioritizeFocusQuestions', 'ensureDiverseTopics', 'selectedTags', 'topicLabels', 'updatedAt']);
 
       allow delete: if false;
+    }
+
+    // Deleted user tombstones (managed by coaches)
+    match /deleted_users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isCoach());
+      allow list: if false;
+
+      allow create: if isCoach() && isValidId(userId)
+        && request.auth.uid != userId
+        && isValidDeletedUser(incoming(), userId)
+        && incoming().deletedAt == request.time;
+
+      allow update: if false;
+      allow delete: if isCoach() && isValidId(userId) && request.auth.uid != userId;
+    }
+
+    // Shared Teams (managed by all coaches)
+    match /teams/{teamId} {
+      allow get: if isSignedIn() && isValidId(teamId);
+      allow list: if isSignedIn() && existing().questionCount >= 1;
+
+      allow create: if isCoach() && isValidId(teamId)
+        && isValidTeam(incoming(), teamId)
+        && incoming().createdBy == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isCoach() && isValidId(teamId)
+        && isValidTeam(incoming(), teamId)
+        && incoming().id == existing().id
+        && incoming().createdBy == existing().createdBy
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'name', 'playerIds', 'questionCount', 'timePerQuestionSeconds',
+          'prioritizeFocusQuestions', 'ensureDiverseTopics', 'selectedTags', 'updatedAt'
+        ]);
+
+      allow delete: if isCoach() && isValidId(teamId);
     }
   }
 }

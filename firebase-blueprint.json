@@ -88,6 +88,9 @@
         "tags": {
           "type": "array"
         },
+        "teamIds": {
+          "type": "array"
+        },
         "explanation": {
           "type": "string",
           "maxLength": 1000
@@ -159,6 +162,11 @@
         "answers": {
           "type": "array"
         },
+        "teamId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time"
@@ -202,6 +210,77 @@
           "format": "date-time"
         }
       }
+    },
+    "DeletedUser": {
+      "title": "DeletedUser",
+      "description": "Tombstone marker preventing deleted accounts from auto-recreating their profile.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "deletedBy": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "deletedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "deletedBy", "deletedAt"]
+    },
+    "Team": {
+      "title": "Team",
+      "description": "Shared squad with selectable players and team-specific quiz settings.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "playerIds": {
+          "type": "array"
+        },
+        "questionCount": {
+          "type": "number"
+        },
+        "timePerQuestionSeconds": {
+          "type": "number"
+        },
+        "prioritizeFocusQuestions": {
+          "type": "boolean"
+        },
+        "ensureDiverseTopics": {
+          "type": "boolean"
+        },
+        "selectedTags": {
+          "type": "array"
+        },
+        "createdBy": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "name", "playerIds", "questionCount", "timePerQuestionSeconds", "prioritizeFocusQuestions", "ensureDiverseTopics", "createdBy", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -224,6 +303,14 @@
     "/team_meta/{metaId}": {
       "schema": { "$ref": "#/entities/TeamMeta" },
       "description": "Team-wide quiz configuration (quiz_config) and bootstrap lock (bootstrap)."
+    },
+    "/deleted_users/{userId}": {
+      "schema": { "$ref": "#/entities/DeletedUser" },
+      "description": "Tombstone documents for users removed by a coach."
+    },
+    "/teams/{teamId}": {
+      "schema": { "$ref": "#/entities/Team" },
+      "description": "Shared teams managed by coaches with per-team player rosters and quiz settings."
     }
   }
 }

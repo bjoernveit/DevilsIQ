@@ -1,7 +1,7 @@
 import React from 'react';
 import { Player, QuizAttempt, Question } from '../types/basketball';
 import { calculateTacticalGaps, calculateWeeklyTrends, getWeekKey } from '../utils/quizEngine';
-import { X } from 'lucide-react';
+import { X, Trash2 } from 'lucide-react';
 
 interface PlayerDetailModalProps {
   player: Player | null;
@@ -12,6 +12,7 @@ interface PlayerDetailModalProps {
   viewerIsCoach?: boolean;
   currentUserId?: string;
   onToggleRole?: (player: Player, nextRole: 'player' | 'coach') => Promise<void>;
+  onDeletePlayer?: (player: Player) => Promise<void>;
 }
 
 export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
@@ -22,9 +23,19 @@ export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
   onClose,
   viewerIsCoach,
   currentUserId,
-  onToggleRole
+  onToggleRole,
+  onDeletePlayer
 }) => {
   const [isUpdatingRole, setIsUpdatingRole] = React.useState(false);
+  const [confirmDelete, setConfirmDelete] = React.useState(false);
+  const [isDeleting, setIsDeleting] = React.useState(false);
+  const [actionError, setActionError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    setConfirmDelete(false);
+    setIsDeleting(false);
+    setActionError(null);
+  }, [isOpen, player?.id]);
 
   if (!isOpen || !player) return null;
 
@@ -37,7 +48,9 @@ export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
   const playerGaps = calculateTacticalGaps(questions, playerAttempts, player.id).filter(g => g.totalAnswered > 0);
   const playerTrends = calculateWeeklyTrends(attempts, player.id);
 
-  const canManageRole = Boolean(viewerIsCoach && onToggleRole && currentUserId && player.id !== currentUserId);
+  const canManageMember = Boolean(viewerIsCoach && currentUserId && player.id !== currentUserId);
+  const canManageRole = Boolean(canManageMember && onToggleRole);
+  const canDeleteMember = Boolean(canManageMember && onDeletePlayer);
   const isTargetCoach = player.role === 'coach';
 
   return (
@@ -50,6 +63,7 @@ export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
               {player.name}
             </h2>
             <p className="text-xs text-zinc-400">
+              {isTargetCoach ? 'Trainer · ' : ''}
               {playerAttempts.length} {playerAttempts.length === 1 ? 'Versuch' : 'Versuche'} gesamt
             </p>
           </div>
@@ -57,11 +71,14 @@ export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
             {canManageRole && onToggleRole && (
               <button
                 type="button"
-                disabled={isUpdatingRole}
+                disabled={isUpdatingRole || isDeleting}
                 onClick={async () => {
+                  setActionError(null);
                   setIsUpdatingRole(true);
                   try {
                     await onToggleRole(player, isTargetCoach ? 'player' : 'coach');
+                  } catch {
+                    setActionError('Rolle konnte nicht geändert werden.');
                   } finally {
                     setIsUpdatingRole(false);
                   }
@@ -182,6 +199,68 @@ export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
               </div>
             )}
           </div>
+          {/* Action Error */}
+          {actionError && (
+            <div
+              role="alert"
+              className="text-xs text-red-200 bg-red-950/70 border border-red-800 rounded-xl px-3.5 py-2.5"
+            >
+              {actionError}
+            </div>
+          )}
+
+          {/* Coach Danger Zone: Delete Player/User */}
+          {canDeleteMember && onDeletePlayer && (
+            <div className="pt-2 border-t border-zinc-800">
+              {!confirmDelete ? (
+                <button
+                  type="button"
+                  disabled={isUpdatingRole || isDeleting}
+                  onClick={() => {
+                    setActionError(null);
+                    setConfirmDelete(true);
+                  }}
+                  className="w-full h-10 rounded-xl border border-red-800/70 bg-red-950/40 hover:bg-red-950/70 disabled:opacity-50 text-red-200 text-xs font-semibold inline-flex items-center justify-center gap-2 transition-colors"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>{isTargetCoach ? 'Benutzer löschen' : 'Spieler löschen'}</span>
+                </button>
+              ) : (
+                <div className="bg-red-950/50 border border-red-800/80 rounded-xl p-3.5 space-y-3">
+                  <p className="text-xs text-red-100 leading-relaxed">
+                    „{player.name}“ wirklich löschen? Alle Profil- und Quizdaten dieses Kontos werden entfernt.
+                  </p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      disabled={isDeleting}
+                      onClick={() => setConfirmDelete(false)}
+                      className="h-9 rounded-lg bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-xs font-medium text-zinc-200 transition-colors"
+                    >
+                      Abbrechen
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isDeleting}
+                      onClick={async () => {
+                        setActionError(null);
+                        setIsDeleting(true);
+                        try {
+                          await onDeletePlayer(player);
+                        } catch {
+                          setActionError('Benutzer konnte nicht gelöscht werden.');
+                          setIsDeleting(false);
+                        }
+                      }}
+                      className="h-9 rounded-lg bg-red-700 hover:bg-red-600 disabled:opacity-50 text-xs font-semibold text-white transition-colors"
+                    >
+                      {isDeleting ? 'Wird gelöscht...' : 'Endgültig löschen'}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

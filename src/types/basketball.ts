@@ -56,6 +56,7 @@ export interface Question {
   imageUrl?: string;
   options: QuizOption[];
   tags: string[]; // e.g. ["Pick & Roll", "Offense"]
+  teamIds?: string[]; // Empty or omitted = applies to all teams
   isPriorityFocus: boolean; // Coach flag for frequent rotation
   explanation: string; // Master tactical breakdown
   keyConcept: string; // E.g. "Weakside Tag", "Drop Coverage", "Backdoor Cut"
@@ -73,6 +74,7 @@ export interface QuizAttemptAnswer {
 export interface QuizAttempt {
   id: string;
   playerId: string;
+  teamId?: string;
   timestamp: string; // ISO string
   weekKey: string; // e.g. "2026-W45"
   totalScore: number;
@@ -90,6 +92,20 @@ export interface QuizConfig {
   ensureDiverseTopics: boolean;
   selectedTags?: string[];
   topicLabels?: string[];
+}
+
+export interface Team {
+  id: string;
+  name: string;
+  playerIds: string[];
+  questionCount: number;
+  timePerQuestionSeconds: number;
+  prioritizeFocusQuestions: boolean;
+  ensureDiverseTopics: boolean;
+  selectedTags?: string[];
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface TacticalGapReport {

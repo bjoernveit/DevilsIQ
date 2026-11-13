@@ -1,9 +1,12 @@
 import React, { useState } from 'react';
-import { Question } from '../types/basketball';
+import { Question, Team } from '../types/basketball';
 import { Plus, Search, Star, Trash2, Edit3, X } from 'lucide-react';
 
 interface QuestionBankViewProps {
   questions: Question[];
+  teams: Team[];
+  selectedTeamFilter: string;
+  onChangeTeamFilter: (teamFilter: string) => void;
   topicLabels: string[];
   onAddQuestion: () => void;
   onEditQuestion: (question: Question) => void;
@@ -14,6 +17,9 @@ interface QuestionBankViewProps {
 
 export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
   questions,
+  teams,
+  selectedTeamFilter,
+  onChangeTeamFilter,
   topicLabels,
   onAddQuestion,
   onEditQuestion,
@@ -29,6 +35,8 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
 
   const allTags = Array.from(new Set([...topicLabels, ...questions.flatMap(q => q.tags)])).sort();
 
+  const teamNameById = new Map(teams.map(t => [t.id, t.name]));
+
   const filteredQuestions = questions.filter(q => {
     const matchesSearch =
       q.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -38,6 +46,17 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
     if (!matchesSearch) return false;
     if (selectedTag !== 'All' && !q.tags.includes(selectedTag)) return false;
     if (onlyFocus && !q.isPriorityFocus) return false;
+
+    const isGlobal = !q.teamIds || q.teamIds.length === 0;
+    if (selectedTeamFilter === 'global' && !isGlobal) return false;
+    if (
+      selectedTeamFilter !== 'all' &&
+      selectedTeamFilter !== 'global' &&
+      !(isGlobal || q.teamIds?.includes(selectedTeamFilter))
+    ) {
+      return false;
+    }
+
     return true;
   });
 
@@ -92,6 +111,48 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Team Scope Filter Row */}
+      {teams.length > 0 && (
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+          <button
+            type="button"
+            onClick={() => onChangeTeamFilter('all')}
+            className={`px-3 py-1.5 rounded-lg text-xs whitespace-nowrap transition-colors min-h-[34px] ${
+              selectedTeamFilter === 'all'
+                ? 'bg-red-700 text-white font-medium'
+                : 'bg-zinc-900 border border-zinc-800 text-zinc-300 hover:bg-zinc-800'
+            }`}
+          >
+            Alle Fragen
+          </button>
+          <button
+            type="button"
+            onClick={() => onChangeTeamFilter('global')}
+            className={`px-3 py-1.5 rounded-lg text-xs whitespace-nowrap transition-colors min-h-[34px] ${
+              selectedTeamFilter === 'global'
+                ? 'bg-red-700 text-white font-medium'
+                : 'bg-zinc-900 border border-zinc-800 text-zinc-300 hover:bg-zinc-800'
+            }`}
+          >
+            Für alle Teams
+          </button>
+          {teams.map(team => (
+            <button
+              key={team.id}
+              type="button"
+              onClick={() => onChangeTeamFilter(team.id)}
+              className={`px-3 py-1.5 rounded-lg text-xs whitespace-nowrap transition-colors min-h-[34px] ${
+                selectedTeamFilter === team.id
+                  ? 'bg-red-700 text-white font-medium'
+                  : 'bg-zinc-900 border border-zinc-800 text-zinc-300 hover:bg-zinc-800'
+              }`}
+            >
+              {team.name}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Topic Filter Row */}
       <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
@@ -166,6 +227,10 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
           filteredQuestions.map(q => {
             const promptText = q.scenario || q.title;
             const hasOptionImages = q.options.some(o => Boolean(o.imageUrl));
+            const validTeamNames = (q.teamIds || [])
+              .map(id => teamNameById.get(id))
+              .filter((name): name is string => Boolean(name));
+            const teamLabel = validTeamNames.length > 0 ? validTeamNames.join(', ') : 'Alle Teams';
 
             return (
               <div
@@ -174,6 +239,10 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
               >
                 <div className="min-w-0 flex-1 space-y-1">
                   <div className="text-xs text-zinc-400 flex items-center gap-1.5 flex-wrap">
+                    <span className={validTeamNames.length > 0 ? 'text-red-300 font-medium' : 'text-zinc-300'}>
+                      {teamLabel}
+                    </span>
+                    <span aria-hidden="true">·</span>
                     <span>{q.tags.length > 0 ? q.tags.join(', ') : 'Ohne Label'}</span>
                     {(q.imageUrl || hasOptionImages) && (
                       <>

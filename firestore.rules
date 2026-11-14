@@ -101,7 +101,7 @@ service cloud.firestore {
         && data.keys().hasOnly(['id', 'name', 'playerIds', 'questionCount', 'timePerQuestionSeconds', 'prioritizeFocusQuestions', 'ensureDiverseTopics', 'selectedTags', 'isDefault', 'createdBy', 'createdAt', 'updatedAt'])
         && data.id is string && data.id == teamId && data.id.size() >= 1 && data.id.size() <= 128
         && data.name is string && data.name.size() >= 1 && data.name.size() <= 64
-        && data.playerIds is list && data.playerIds.size() <= 100 && (data.playerIds.size() == 0 || data.playerIds[0] is string)
+        && data.playerIds is list && data.playerIds.size() <= 250 && (data.playerIds.size() == 0 || data.playerIds[0] is string)
         && data.questionCount is int && data.questionCount >= 1 && data.questionCount <= 25
         && data.timePerQuestionSeconds is int && data.timePerQuestionSeconds >= 5 && data.timePerQuestionSeconds <= 120
         && data.prioritizeFocusQuestions is bool

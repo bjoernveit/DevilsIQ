@@ -212,16 +212,30 @@ export class AccountDeletedError extends Error {
 
 const inFlightProfileEnsures = new Map<string, Promise<void>>();
 
-async function addPlayerToDefaultTeam(uid: string): Promise<void> {
+async function addPlayerToDefaultTeam(
+  uid: string,
+  options: { onlyIfUnassigned?: boolean } = {}
+): Promise<void> {
   try {
-    const defaultTeamsQuery = query(
+    const teamsQuery = query(
       collection(db, 'teams'),
-      where('isDefault', '==', true)
+      where('questionCount', '>=', 1)
     );
-    const snapshot = await getDocs(defaultTeamsQuery);
+    const snapshot = await getDocs(teamsQuery);
     if (snapshot.empty) return;
 
-    for (const teamDoc of snapshot.docs) {
+    if (options.onlyIfUnassigned) {
+      const alreadyAssigned = snapshot.docs.some(d => {
+        const ids = d.data().playerIds;
+        return Array.isArray(ids) && ids.map(String).includes(uid);
+      });
+      if (alreadyAssigned) return;
+    }
+
+    const defaultTeamDocs = snapshot.docs.filter(d => d.data().isDefault === true);
+    if (defaultTeamDocs.length === 0) return;
+
+    for (const teamDoc of defaultTeamDocs) {
       await runTransaction(db, async transaction => {
         const freshSnap = await transaction.get(teamDoc.ref);
         if (!freshSnap.exists()) return;
@@ -230,7 +244,7 @@ async function addPlayerToDefaultTeam(uid: string): Promise<void> {
         const existingIds: string[] = Array.isArray(data.playerIds)
           ? data.playerIds.map(String)
           : [];
-        if (existingIds.includes(uid) || existingIds.length >= 100) return;
+        if (existingIds.includes(uid) || existingIds.length >= 250) return;
 
         transaction.update(teamDoc.ref, {
           playerIds: [...existingIds, uid],
@@ -239,7 +253,7 @@ async function addPlayerToDefaultTeam(uid: string): Promise<void> {
       });
     }
   } catch (error) {
-    // Log without blocking user signup if no default team permissions apply
+    // Log without blocking user signup/login if no default team permissions apply
     console.warn('Could not auto-assign default team:', error);
   }
 }
@@ -247,7 +261,7 @@ async function addPlayerToDefaultTeam(uid: string): Promise<void> {
 /**
  * Creates a Firestore profile for an authenticated user if missing.
  * First account ever created becomes Coach atomically via team_meta/bootstrap.
- * Subsequent newly registered players are automatically added to the default team (if configured).
+ * Subsequent newly registered players (and existing unassigned players) are automatically added to the default team (if configured).
  */
 export async function ensureUserProfileExists(user: User, preferredUsername?: string): Promise<void> {
   const existingPromise = inFlightProfileEnsures.get(user.uid);
@@ -277,7 +291,13 @@ export async function ensureUserProfileExists(user: User, preferredUsername?: st
       handleFirestoreError(error, OperationType.GET, `users/${user.uid}`);
     }
 
-    if (existingSnap.exists()) return;
+    if (existingSnap.exists()) {
+      const existingData = existingSnap.data();
+      if (existingData.role !== 'coach') {
+        await addPlayerToDefaultTeam(user.uid, { onlyIfUnassigned: true });
+      }
+      return;
+    }
 
     const fallbackName = (user.email ? user.email.split('@')[0] : 'spieler')
       .toLowerCase()
@@ -781,7 +801,7 @@ export async function createTeamInFirestore(
 
   const cleanPlayerIds = Array.from(
     new Set(initialPlayerIds.map(id => sanitizeId(id)).filter(Boolean))
-  ).slice(0, 100);
+  ).slice(0, 250);
 
   const payload: Record<string, unknown> = {
     id: teamId,
@@ -835,7 +855,7 @@ export async function updateTeamInFirestore(
   if (updates.playerIds !== undefined) {
     payload.playerIds = Array.from(
       new Set(updates.playerIds.map(id => sanitizeId(id)).filter(Boolean))
-    ).slice(0, 100);
+    ).slice(0, 250);
   }
   if (updates.questionCount !== undefined) {
     payload.questionCount = Math.max(1, Math.min(25, Math.round(updates.questionCount)));

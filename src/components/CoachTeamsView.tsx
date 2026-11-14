@@ -171,6 +171,28 @@ export const CoachTeamsView: React.FC<CoachTeamsViewProps> = ({
     (p.username && p.username.toLowerCase().includes(playerSearch.trim().toLowerCase()))
   );
 
+  const assignedPlayerIdSet = new Set(teams.flatMap(t => t.playerIds));
+  const unassignedPlayers = sortedPlayers.filter(
+    p => p.role !== 'coach' && !assignedPlayerIdSet.has(p.id)
+  );
+  const defaultTeam = teams.find(t => t.isDefault) || null;
+
+  const handleAssignUnassignedToDefault = async () => {
+    if (!defaultTeam || unassignedPlayers.length === 0 || isSaving) return;
+    setErrorMsg(null);
+    setIsSaving(true);
+    try {
+      const mergedIds = Array.from(
+        new Set([...defaultTeam.playerIds, ...unassignedPlayers.map(p => p.id)])
+      );
+      await onUpdateTeam(defaultTeam.id, { playerIds: mergedIds });
+    } catch {
+      setErrorMsg('Spieler konnten nicht dem Standard-Team zugeordnet werden.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const teamApplicableQuestions = activeTeam
     ? filterQuestionsForTeam(questions, activeTeam.id)
     : [];
@@ -212,6 +234,37 @@ export const CoachTeamsView: React.FC<CoachTeamsViewProps> = ({
           className="text-xs text-red-200 bg-red-950/70 border border-red-800 rounded-xl px-4 py-2.5"
         >
           {errorMsg}
+        </div>
+      )}
+
+      {unassignedPlayers.length > 0 && (
+        <div className="bg-amber-950/35 border border-amber-700/60 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="space-y-0.5 min-w-0">
+            <p className="text-xs font-semibold text-amber-200">
+              {unassignedPlayers.length}{' '}
+              {unassignedPlayers.length === 1
+                ? 'Spieler ist aktuell keinem Team zugeordnet'
+                : 'Spieler sind aktuell keinem Team zugeordnet'}
+            </p>
+            <p className="text-[11px] text-amber-100/80 truncate">
+              {unassignedPlayers.map(p => p.name).join(', ')}
+            </p>
+          </div>
+          {defaultTeam ? (
+            <button
+              type="button"
+              disabled={isSaving}
+              onClick={handleAssignUnassignedToDefault}
+              className="px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-black font-semibold text-xs inline-flex items-center justify-center gap-1.5 shrink-0 min-h-[38px] transition-colors"
+            >
+              <UserPlus className="w-3.5 h-3.5" />
+              <span>Alle zu „{defaultTeam.name}“ hinzufügen</span>
+            </button>
+          ) : (
+            <span className="text-[11px] text-amber-200/80 shrink-0">
+              Lege ein Standard-Team fest, um sie automatisch zuzuordnen.
+            </span>
+          )}
         </div>
       )}
 

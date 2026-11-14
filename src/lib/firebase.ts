@@ -34,6 +34,11 @@ import {
   UserRole
 } from '../types/basketball';
 import { INITIAL_QUESTIONS, ALL_TAGS } from '../data/initialData';
+import {
+  calculateCurrentErrorFreeStreak,
+  calculateBestErrorFreeStreak,
+  getWeekKey
+} from '../utils/quizEngine';
 
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
@@ -662,9 +667,77 @@ export async function saveAttemptToFirestore(attempt: QuizAttempt): Promise<void
 
   try {
     await setDoc(doc(db, 'attempts', attemptId), payload);
+    await updateUserStatsInFirestore(attempt.playerId);
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, path);
   }
+}
+
+export async function updateUserStatsInFirestore(playerId: string, knownAttempts?: QuizAttempt[]): Promise<void> {
+  try {
+    let attempts = knownAttempts;
+    if (!attempts) {
+      const attemptsQuery = query(collection(db, 'attempts'), where('playerId', '==', playerId));
+      const snapshot = await getDocs(attemptsQuery);
+      attempts = snapshot.docs.map(d => {
+        const data = d.data();
+        return {
+          id: d.id,
+          playerId: String(data.playerId || ''),
+          teamId: data.teamId ? String(data.teamId) : undefined,
+          timestamp: String(data.timestamp || toIsoString(data.createdAt)),
+          weekKey: String(data.weekKey || ''),
+          totalScore: Number(data.totalScore || 0),
+          correctCount: Number(data.correctCount || 0),
+          totalQuestions: Number(data.totalQuestions || 1),
+          totalTimeSeconds: Number(data.totalTimeSeconds || 0),
+          maxStreak: Number(data.maxStreak || 0),
+          answers: Array.isArray(data.answers) ? data.answers : [],
+          passed: typeof data.passed === 'boolean' ? data.passed : undefined
+        } as QuizAttempt;
+      });
+    }
+
+    const currentWeekKey = getWeekKey();
+    const thisWeekAttempts = attempts.filter(a => a.weekKey === currentWeekKey);
+    const passedThisWeek = thisWeekAttempts.filter(
+      a => a.passed === true || a.correctCount === a.totalQuestions
+    );
+    const bestScoreThisWeek =
+      passedThisWeek.length > 0 ? Math.min(...passedThisWeek.map(a => a.totalTimeSeconds)) : 0;
+    const currentStreak = calculateCurrentErrorFreeStreak(attempts);
+    const bestStreak = calculateBestErrorFreeStreak(attempts);
+    const totalAttemptsAllTime = attempts.length;
+
+    await setDoc(doc(db, 'user_stats', playerId), {
+      userId: playerId,
+      currentStreak,
+      bestStreak,
+      totalAttemptsAllTime,
+      bestScoreThisWeek,
+      updatedAt: serverTimestamp()
+    }, { merge: true });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `user_stats/${playerId}`);
+  }
+}
+
+export async function migrateAllUserStatsToFirestore(players: Player[], attempts: QuizAttempt[]): Promise<number> {
+  const attemptsByPlayer = new Map<string, QuizAttempt[]>();
+  for (const a of attempts) {
+    const list = attemptsByPlayer.get(a.playerId) || [];
+    list.push(a);
+    attemptsByPlayer.set(a.playerId, list);
+  }
+
+  let count = 0;
+  for (const player of players) {
+    if (player.role === 'coach' && !attemptsByPlayer.has(player.id)) continue;
+    const pAttempts = attemptsByPlayer.get(player.id) || [];
+    await updateUserStatsInFirestore(player.id, pAttempts);
+    count += 1;
+  }
+  return count;
 }
 
 export async function migrateAllAttemptsToTeam(targetTeamId: string): Promise<number> {

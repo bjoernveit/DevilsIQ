@@ -291,6 +291,35 @@
         }
       },
       "required": ["id", "name", "playerIds", "questionCount", "timePerQuestionSeconds", "prioritizeFocusQuestions", "ensureDiverseTopics", "createdBy", "createdAt", "updatedAt"]
+    },
+    "UserStats": {
+      "title": "UserStats",
+      "description": "Aggregated quiz performance stats per player.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "currentStreak": {
+          "type": "integer"
+        },
+        "bestStreak": {
+          "type": "integer"
+        },
+        "totalAttemptsAllTime": {
+          "type": "integer"
+        },
+        "bestScoreThisWeek": {
+          "type": "number"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["userId", "currentStreak", "bestStreak", "totalAttemptsAllTime", "bestScoreThisWeek", "updatedAt"]
     }
   },
   "firestore": {
@@ -321,6 +350,10 @@
     "/teams/{teamId}": {
       "schema": { "$ref": "#/entities/Team" },
       "description": "Shared teams managed by coaches with per-team player rosters and quiz settings."
+    },
+    "/user_stats/{userId}": {
+      "schema": { "$ref": "#/entities/UserStats" },
+      "description": "Aggregated quiz performance stats for each player."
     }
   }
 }

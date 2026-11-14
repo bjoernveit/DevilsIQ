@@ -132,6 +132,17 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isValidUserStats(data, userId) {
+      return data.keys().hasAll(['userId', 'currentStreak', 'bestStreak', 'totalAttemptsAllTime', 'bestScoreThisWeek', 'updatedAt'])
+        && data.keys().hasOnly(['userId', 'currentStreak', 'bestStreak', 'totalAttemptsAllTime', 'bestScoreThisWeek', 'updatedAt'])
+        && data.userId is string && data.userId == userId && data.userId.size() <= 128
+        && data.currentStreak is int && data.currentStreak >= 0 && data.currentStreak <= 1000
+        && data.bestStreak is int && data.bestStreak >= 0 && data.bestStreak <= 1000
+        && data.totalAttemptsAllTime is int && data.totalAttemptsAllTime >= 0 && data.totalAttemptsAllTime <= 10000
+        && data.bestScoreThisWeek is number && data.bestScoreThisWeek >= 0 && data.bestScoreThisWeek <= 3600
+        && data.updatedAt is timestamp;
+    }
+
     // Users collection (public team roster without PII)
     match /users/{userId} {
       allow get: if isSignedIn() && isValidId(userId) && (
@@ -331,6 +342,16 @@ service cloud.firestore {
         );
 
       allow delete: if isCoach() && isValidId(teamId);
+    }
+
+    // User Aggregated Stats (denormalized performance metrics)
+    match /user_stats/{userId} {
+      allow get: if isSignedIn() && isValidId(userId);
+      allow list: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isCoach())
+        && isValidUserStats(incoming(), userId)
+        && incoming().updatedAt == request.time;
+      allow delete: if isCoach() && isValidId(userId);
     }
   }
 }

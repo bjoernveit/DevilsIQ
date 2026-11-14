@@ -35,6 +35,7 @@ import {
   deleteTeamFromFirestore,
   migrateAllAttemptsToTeam,
   markRoundStartedInFirestore,
+  migrateAllUserStatsToFirestore,
   toIsoString
 } from './lib/firebase';
 import { AuthScreen } from './components/AuthScreen';
@@ -94,6 +95,8 @@ export default function App() {
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isMigratingAttempts, setIsMigratingAttempts] = useState(false);
   const [migrationMessage, setMigrationMessage] = useState<string | null>(null);
+  const [isMigratingStats, setIsMigratingStats] = useState(false);
+  const [statsMigrationMessage, setStatsMigrationMessage] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   // Listen to Firebase Auth state
@@ -139,13 +142,25 @@ export default function App() {
   const loadAppData = async () => {
     if (!firebaseUser || !profileReady) return;
     try {
-      const [usersSnap, questionsSnap, attemptsSnap, teamsSnap, configSnap] = await Promise.all([
+      const [usersSnap, questionsSnap, attemptsSnap, teamsSnap, configSnap, userStatsSnap] = await Promise.all([
         getDocs(query(collection(db, 'users'), where('role', 'in', ['player', 'coach']))),
         getDocs(query(collection(db, 'questions'), where('isPriorityFocus', 'in', [true, false]))),
         getDocs(query(collection(db, 'attempts'), where('totalQuestions', '>', 0))),
         getDocs(query(collection(db, 'teams'), where('questionCount', '>=', 1))),
-        getDoc(doc(db, 'team_meta', 'quiz_config'))
+        getDoc(doc(db, 'team_meta', 'quiz_config')),
+        getDocs(collection(db, 'user_stats'))
       ]);
+
+      const statsMap = new Map<string, { currentStreak: number; bestStreak: number; totalAttemptsAllTime: number; bestScoreThisWeek: number }>();
+      userStatsSnap.docs.forEach((docSnap: any) => {
+        const d = docSnap.data();
+        statsMap.set(docSnap.id, {
+          currentStreak: Number(d.currentStreak || 0),
+          bestStreak: Number(d.bestStreak || 0),
+          totalAttemptsAllTime: Number(d.totalAttemptsAllTime || 0),
+          bestScoreThisWeek: Number(d.bestScoreThisWeek || 0)
+        });
+      });
 
       const listPlayers: Player[] = usersSnap.docs.map((docSnap: any) => {
         const data = docSnap.data({ serverTimestamps: 'estimate' });
@@ -720,6 +735,21 @@ export default function App() {
                 onOpenTeamConfig={team => openConfigModalForTeam(team)}
                 onTogglePriorityFocus={handleTogglePriorityFocus}
                 onSelectPlayerDetail={handleSelectPlayerDetail}
+                isMigratingStats={isMigratingStats}
+                statsMigrationMessage={statsMigrationMessage}
+                onMigrateStats={async () => {
+                  setIsMigratingStats(true);
+                  setStatsMigrationMessage(null);
+                  try {
+                    const migratedCount = await migrateAllUserStatsToFirestore(players, attempts);
+                    setStatsMigrationMessage(`${migratedCount} Spieler-Statistiken erfolgreich migriert.`);
+                    void loadAppData();
+                  } catch {
+                    setStatsMigrationMessage('Statistik-Migration fehlgeschlagen.');
+                  } finally {
+                    setIsMigratingStats(false);
+                  }
+                }}
               />
             ) : coachSubTab === 'teams' ? (
               <CoachTeamsView

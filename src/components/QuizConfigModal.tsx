@@ -58,7 +58,7 @@ export const QuizConfigModal: React.FC<QuizConfigModalProps> = ({
         <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-800">
           <div className="min-w-0">
             <h2 className="text-base font-bold text-white truncate">
-              {targetTeamName ? `Einstellungen · ${targetTeamName}` : 'Quiz-Einstellungen'}
+              {targetTeamName ? `Einstellungen · ${targetTeamName}` : 'Standardwerte (neue Teams)'}
             </h2>
             {targetTeamName && (
               <p className="text-[11px] text-zinc-400">

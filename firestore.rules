@@ -92,7 +92,7 @@ service cloud.firestore {
 
     function isValidTeam(data, teamId) {
       return data.keys().hasAll(['id', 'name', 'playerIds', 'questionCount', 'timePerQuestionSeconds', 'prioritizeFocusQuestions', 'ensureDiverseTopics', 'createdBy', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'name', 'playerIds', 'questionCount', 'timePerQuestionSeconds', 'prioritizeFocusQuestions', 'ensureDiverseTopics', 'selectedTags', 'createdBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'name', 'playerIds', 'questionCount', 'timePerQuestionSeconds', 'prioritizeFocusQuestions', 'ensureDiverseTopics', 'selectedTags', 'isDefault', 'createdBy', 'createdAt', 'updatedAt'])
         && data.id is string && data.id == teamId && data.id.size() >= 1 && data.id.size() <= 128
         && data.name is string && data.name.size() >= 1 && data.name.size() <= 64
         && data.playerIds is list && data.playerIds.size() <= 100 && (data.playerIds.size() == 0 || data.playerIds[0] is string)
@@ -101,6 +101,7 @@ service cloud.firestore {
         && data.prioritizeFocusQuestions is bool
         && data.ensureDiverseTopics is bool
         && (!('selectedTags' in data) || (data.selectedTags is list && data.selectedTags.size() <= 20 && (data.selectedTags.size() == 0 || data.selectedTags[0] is string)))
+        && (!('isDefault' in data) || data.isDefault is bool)
         && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
@@ -274,16 +275,31 @@ service cloud.firestore {
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
 
-      allow update: if isCoach() && isValidId(teamId)
+      allow update: if isSignedIn() && isValidId(teamId)
         && isValidTeam(incoming(), teamId)
         && incoming().id == existing().id
         && incoming().createdBy == existing().createdBy
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
-        && incoming().diff(existing()).affectedKeys().hasOnly([
-          'name', 'playerIds', 'questionCount', 'timePerQuestionSeconds',
-          'prioritizeFocusQuestions', 'ensureDiverseTopics', 'selectedTags', 'updatedAt'
-        ]);
+        && (
+          (
+            isCoach()
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'name', 'playerIds', 'questionCount', 'timePerQuestionSeconds',
+              'prioritizeFocusQuestions', 'ensureDiverseTopics', 'selectedTags', 'isDefault', 'updatedAt'
+            ])
+          )
+          || (
+            !exists(/databases/$(database)/documents/deleted_users/$(request.auth.uid))
+            && ('isDefault' in existing())
+            && existing().isDefault == true
+            && incoming().diff(existing()).affectedKeys().hasOnly(['playerIds', 'updatedAt'])
+            && !(request.auth.uid in existing().playerIds)
+            && (request.auth.uid in incoming().playerIds)
+            && incoming().playerIds.hasAll(existing().playerIds)
+            && incoming().playerIds.size() == existing().playerIds.size() + 1
+          )
+        );
 
       allow delete: if isCoach() && isValidId(teamId);
     }

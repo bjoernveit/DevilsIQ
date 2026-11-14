@@ -9,7 +9,11 @@ import {
   calculateAllTimeLeaderboard,
   calculateWeeklyTrends,
   filterQuestionsForTeam,
-  getTeamQuizConfig
+  getTeamQuizConfig,
+  calculateCurrentErrorFreeStreak,
+  calculateBestErrorFreeStreak,
+  calculatePlayerMedals,
+  getOptionDisplayText
 } from './quizEngine';
 import { Question, QuizConfig, QuizAttempt, Player, Team } from '../types/basketball';
 
@@ -348,6 +352,301 @@ test('calculateAllTimeLeaderboard aggregates all attempts across weeks', () => {
   assert.equal(leaderboard.length, 1);
   assert.equal(leaderboard[0].player.id, 'p1');
   assert.equal(leaderboard[0].bestScoreThisWeek, 30);
+  assert.equal(leaderboard[0].currentStreak, 2);
+});
+
+test('calculateCurrentErrorFreeStreak counts trailing passed attempts accurately', () => {
+  const attempts: QuizAttempt[] = [
+    {
+      id: 'a1',
+      playerId: 'p1',
+      timestamp: '2026-11-01T10:00:00Z',
+      weekKey: '2026-W44',
+      totalScore: 20.5,
+      correctCount: 5,
+      totalQuestions: 5,
+      totalTimeSeconds: 20.5,
+      maxStreak: 5,
+      answers: [],
+      passed: true
+    },
+    {
+      id: 'a2',
+      playerId: 'p1',
+      timestamp: '2026-11-02T10:00:00Z',
+      weekKey: '2026-W45',
+      totalScore: 5.1,
+      correctCount: 1,
+      totalQuestions: 5,
+      totalTimeSeconds: 5.1,
+      maxStreak: 1,
+      answers: [],
+      passed: false
+    },
+    {
+      id: 'a3',
+      playerId: 'p1',
+      timestamp: '2026-11-03T10:00:00Z',
+      weekKey: '2026-W45',
+      totalScore: 18.2,
+      correctCount: 5,
+      totalQuestions: 5,
+      totalTimeSeconds: 18.2,
+      maxStreak: 5,
+      answers: [],
+      passed: true
+    },
+    {
+      id: 'a4',
+      playerId: 'p1',
+      timestamp: '2026-11-04T10:00:00Z',
+      weekKey: '2026-W45',
+      totalScore: 16.7,
+      correctCount: 5,
+      totalQuestions: 5,
+      totalTimeSeconds: 16.7,
+      maxStreak: 5,
+      answers: [],
+      passed: true
+    }
+  ];
+
+  assert.equal(calculateCurrentErrorFreeStreak(attempts), 2);
+  assert.equal(calculateCurrentErrorFreeStreak([]), 0);
+
+  // If latest run is a fail, streak resets to 0
+  const withLatestFail: QuizAttempt[] = [
+    ...attempts,
+    {
+      id: 'a5',
+      playerId: 'p1',
+      timestamp: '2026-11-05T10:00:00Z',
+      weekKey: '2026-W45',
+      totalScore: 4.0,
+      correctCount: 0,
+      totalQuestions: 5,
+      totalTimeSeconds: 4.0,
+      maxStreak: 0,
+      answers: [],
+      passed: false
+    }
+  ];
+  assert.equal(calculateCurrentErrorFreeStreak(withLatestFail), 0);
+  // Highest streak before that fail was 2 (a3 + a4)
+  assert.equal(calculateBestErrorFreeStreak(withLatestFail), 2);
+});
+
+test('calculateBestErrorFreeStreak finds peak consecutive passed runs across history', () => {
+  const mk = (id: string, ts: string, passed: boolean): QuizAttempt => ({
+    id,
+    playerId: 'p1',
+    timestamp: ts,
+    weekKey: '2026-W45',
+    totalScore: 15,
+    correctCount: passed ? 5 : 2,
+    totalQuestions: 5,
+    totalTimeSeconds: 15,
+    maxStreak: passed ? 5 : 2,
+    answers: [],
+    passed
+  });
+
+  const history: QuizAttempt[] = [
+    mk('1', '2026-11-01T10:00:00Z', true),
+    mk('2', '2026-11-02T10:00:00Z', true),
+    mk('3', '2026-11-03T10:00:00Z', true),
+    mk('4', '2026-11-04T10:00:00Z', false),
+    mk('5', '2026-11-05T10:00:00Z', true)
+  ];
+
+  assert.equal(calculateCurrentErrorFreeStreak(history), 1);
+  assert.equal(calculateBestErrorFreeStreak(history), 3);
+  assert.equal(calculateBestErrorFreeStreak([]), 0);
+});
+
+test('getOptionDisplayText hides default placeholders when option has an image while keeping custom text', () => {
+  assert.equal(getOptionDisplayText('Antwort A', true), '');
+  assert.equal(getOptionDisplayText('Option B', true), '');
+  assert.equal(getOptionDisplayText('Bild 1', true), '');
+  assert.equal(getOptionDisplayText('Drop Coverage', true), 'Drop Coverage');
+  assert.equal(getOptionDisplayText('Antwort A', false), 'Antwort A');
+});
+
+test('calculatePlayerMedals awards Gold, Silver, and Bronze for completed weeks AND current week top 3 (transferring when overtaken)', () => {
+  const players: Player[] = [
+    { id: 'p1', name: 'Spieler 1', avatarColor: '#111', role: 'player' },
+    { id: 'p2', name: 'Spieler 2', avatarColor: '#333', role: 'player' },
+    { id: 'p3', name: 'Spieler 3', avatarColor: '#444', role: 'player' },
+    { id: 'c1', name: 'Trainer 1', avatarColor: '#222', role: 'coach' }
+  ];
+
+  const attempts: QuizAttempt[] = [
+    // W43: p1 passes (Gold), p2 passes slower (Silver), c1 fails -> no Bronze
+    {
+      id: 'w43-p1',
+      playerId: 'p1',
+      timestamp: '2026-10-20T10:00:00Z',
+      weekKey: '2026-W43',
+      totalScore: 25.4,
+      correctCount: 5,
+      totalQuestions: 5,
+      totalTimeSeconds: 25.4,
+      maxStreak: 5,
+      answers: [],
+      passed: true
+    },
+    {
+      id: 'w43-p2',
+      playerId: 'p2',
+      timestamp: '2026-10-20T10:30:00Z',
+      weekKey: '2026-W43',
+      totalScore: 28.0,
+      correctCount: 5,
+      totalQuestions: 5,
+      totalTimeSeconds: 28.0,
+      maxStreak: 5,
+      answers: [],
+      passed: true
+    },
+    {
+      id: 'w43-c1-fail',
+      playerId: 'c1',
+      timestamp: '2026-10-20T11:00:00Z',
+      weekKey: '2026-W43',
+      totalScore: 5.0,
+      correctCount: 1,
+      totalQuestions: 5,
+      totalTimeSeconds: 5.0,
+      maxStreak: 1,
+      answers: [],
+      passed: false
+    },
+    // W44: c1 (14.2s -> Gold), p1 (19.8s -> Silver), p3 (22.1s -> Bronze), p2 (24.0s -> 4th, no medal)
+    {
+      id: 'w44-p1',
+      playerId: 'p1',
+      timestamp: '2026-10-27T10:00:00Z',
+      weekKey: '2026-W44',
+      totalScore: 19.8,
+      correctCount: 5,
+      totalQuestions: 5,
+      totalTimeSeconds: 19.8,
+      maxStreak: 5,
+      answers: [],
+      passed: true
+    },
+    {
+      id: 'w44-c1',
+      playerId: 'c1',
+      timestamp: '2026-10-27T11:00:00Z',
+      weekKey: '2026-W44',
+      totalScore: 14.2,
+      correctCount: 5,
+      totalQuestions: 5,
+      totalTimeSeconds: 14.2,
+      maxStreak: 5,
+      answers: [],
+      passed: true
+    },
+    {
+      id: 'w44-p3',
+      playerId: 'p3',
+      timestamp: '2026-10-27T12:00:00Z',
+      weekKey: '2026-W44',
+      totalScore: 22.1,
+      correctCount: 5,
+      totalQuestions: 5,
+      totalTimeSeconds: 22.1,
+      maxStreak: 5,
+      answers: [],
+      passed: true
+    },
+    {
+      id: 'w44-p2',
+      playerId: 'p2',
+      timestamp: '2026-10-27T13:00:00Z',
+      weekKey: '2026-W44',
+      totalScore: 24.0,
+      correctCount: 5,
+      totalQuestions: 5,
+      totalTimeSeconds: 24.0,
+      maxStreak: 5,
+      answers: [],
+      passed: true
+    },
+    // W45 (current week): p1 leads in 10.1s (Gold), p2 in 12.0s (Silver)
+    {
+      id: 'w45-p1',
+      playerId: 'p1',
+      timestamp: '2026-11-03T10:00:00Z',
+      weekKey: '2026-W45',
+      totalScore: 10.1,
+      correctCount: 5,
+      totalQuestions: 5,
+      totalTimeSeconds: 10.1,
+      maxStreak: 5,
+      answers: [],
+      passed: true
+    },
+    {
+      id: 'w45-p2',
+      playerId: 'p2',
+      timestamp: '2026-11-03T11:00:00Z',
+      weekKey: '2026-W45',
+      totalScore: 12.0,
+      correctCount: 5,
+      totalQuestions: 5,
+      totalTimeSeconds: 12.0,
+      maxStreak: 5,
+      answers: [],
+      passed: true
+    }
+  ];
+
+  const medalsBefore = calculatePlayerMedals(
+    attempts,
+    '2026-W45',
+    new Set(players.map(p => p.id))
+  );
+  assert.deepEqual(medalsBefore.get('p1'), { gold: 2, silver: 1, bronze: 0 });
+  assert.deepEqual(medalsBefore.get('p2'), { gold: 0, silver: 2, bronze: 0 });
+  assert.deepEqual(medalsBefore.get('p3'), { gold: 0, silver: 0, bronze: 1 });
+  assert.deepEqual(medalsBefore.get('c1'), { gold: 1, silver: 0, bronze: 0 });
+
+  // c1 posts faster time in W45 (9.4s) -> c1 takes W45 Gold, p1 shifts to W45 Silver, p2 shifts to W45 Bronze
+  const attemptsAfterOvertake: QuizAttempt[] = [
+    ...attempts,
+    {
+      id: 'w45-c1-lead',
+      playerId: 'c1',
+      timestamp: '2026-11-04T10:00:00Z',
+      weekKey: '2026-W45',
+      totalScore: 9.4,
+      correctCount: 5,
+      totalQuestions: 5,
+      totalTimeSeconds: 9.4,
+      maxStreak: 5,
+      answers: [],
+      passed: true
+    }
+  ];
+
+  const medalsAfter = calculatePlayerMedals(
+    attemptsAfterOvertake,
+    '2026-W45',
+    new Set(players.map(p => p.id))
+  );
+  assert.deepEqual(medalsAfter.get('c1'), { gold: 2, silver: 0, bronze: 0 });
+  assert.deepEqual(medalsAfter.get('p1'), { gold: 1, silver: 2, bronze: 0 });
+  assert.deepEqual(medalsAfter.get('p2'), { gold: 0, silver: 1, bronze: 1 });
+  assert.deepEqual(medalsAfter.get('p3'), { gold: 0, silver: 0, bronze: 1 });
+
+  // Coaches are included on the weekly leaderboard
+  const w44Board = calculateWeeklyLeaderboard(players, attempts, '2026-W44');
+  assert.equal(w44Board[0].player.id, 'c1');
+  assert.equal(w44Board[0].bestScoreThisWeek, 14.2);
+  assert.equal(w44Board[1].player.id, 'p1');
+  assert.equal(w44Board[1].bestScoreThisWeek, 19.8);
 });
 
 

@@ -1,12 +1,22 @@
 import React, { useState, useMemo } from 'react';
 import { Player, QuizAttempt, Question } from '../types/basketball';
-import { calculateTacticalGaps, calculateWeeklyTrends, getWeekKey } from '../utils/quizEngine';
-import { X, Trash2, Star, ExternalLink, ChevronDown, ChevronUp, AlertCircle, CheckCircle2 } from 'lucide-react';
+import {
+  calculateTacticalGaps,
+  calculateWeeklyTrends,
+  getWeekKey,
+  calculateCurrentErrorFreeStreak,
+  calculateBestErrorFreeStreak,
+  getOptionDisplayText,
+  PlayerMedals
+} from '../utils/quizEngine';
+import { PlayerLabel } from './PlayerLabel';
+import { X, Trash2, Star, ExternalLink, ChevronDown, ChevronUp, AlertCircle, CheckCircle2, Flame } from 'lucide-react';
 
 interface PlayerDetailModalProps {
   player: Player | null;
   attempts: QuizAttempt[];
   questions: Question[];
+  medals?: PlayerMedals;
   isOpen: boolean;
   onClose: () => void;
   viewerIsCoach?: boolean;
@@ -21,6 +31,7 @@ export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
   player,
   attempts,
   questions,
+  medals,
   isOpen,
   onClose,
   viewerIsCoach,
@@ -62,6 +73,14 @@ export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
   const averagePassedTime = passedAttempts.length > 0
     ? Math.round((passedAttempts.reduce((sum, a) => sum + a.totalTimeSeconds, 0) / passedAttempts.length) * 10) / 10
     : 0;
+  const currentStreak = useMemo(
+    () => calculateCurrentErrorFreeStreak(playerAttempts),
+    [playerAttempts]
+  );
+  const bestStreak = useMemo(
+    () => calculateBestErrorFreeStreak(playerAttempts),
+    [playerAttempts]
+  );
 
   const playerGaps = useMemo(() => {
     if (!player) return [];
@@ -171,7 +190,7 @@ export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
         <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-800 gap-3">
           <div className="min-w-0">
             <h2 className="text-base font-bold text-white truncate">
-              {player.name}
+              <PlayerLabel name={player.name} medals={medals} />
             </h2>
             <p className="text-xs text-zinc-400">
               {isTargetCoach ? 'Trainer · ' : ''}
@@ -248,7 +267,7 @@ export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
           {activeTab === 'overview' ? (
             <>
               {/* Weekly Status */}
-              <div className="grid grid-cols-3 gap-2.5 text-center">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-center">
                 <div className="p-3 bg-zinc-950 rounded-xl border border-zinc-800">
                   <div className="text-[11px] text-zinc-400">Diese Woche</div>
                   <div className="text-base font-bold font-mono text-white mt-0.5">
@@ -269,6 +288,22 @@ export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
                     {passedAttempts.length > 0
                       ? `${Math.min(...passedAttempts.map(a => a.totalTimeSeconds)).toFixed(1)}s`
                       : '—'}
+                  </div>
+                </div>
+                <div className="p-3 bg-zinc-950 rounded-xl border border-zinc-800">
+                  <div className="text-[11px] text-zinc-400">Beste Serie</div>
+                  <div className="text-base font-bold font-mono tabular-nums text-white mt-0.5 inline-flex items-center justify-center gap-1">
+                    <Flame
+                      className={`w-4 h-4 ${
+                        bestStreak > 0
+                          ? 'fill-amber-400/20 text-amber-400'
+                          : 'text-zinc-600'
+                      }`}
+                    />
+                    <span>{bestStreak}</span>
+                  </div>
+                  <div className="text-[10px] text-zinc-500 font-mono tabular-nums">
+                    Aktuell: {currentStreak}
                   </div>
                 </div>
               </div>
@@ -565,29 +600,46 @@ export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
                                 Antwortoptionen (Richtige Antwort hervorgehoben):
                               </p>
                               <div className="grid grid-cols-1 gap-1.5">
-                                {stat.question.options.map(opt => (
-                                  <div
-                                    key={opt.id}
-                                    className={`p-2 rounded-lg border text-xs flex items-center justify-between ${
-                                      opt.isCorrect
-                                        ? 'bg-emerald-950/40 border-emerald-700/60 text-emerald-200 font-medium'
-                                        : 'bg-zinc-900 border-zinc-800 text-zinc-300'
-                                    }`}
-                                  >
-                                    <span>{opt.text}</span>
-                                    {opt.isCorrect && (
-                                      <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-emerald-800 text-white font-bold">
-                                        Richtig
-                                      </span>
-                                    )}
-                                  </div>
-                                ))}
+                                {stat.question.options.map(opt => {
+                                  const displayText = getOptionDisplayText(opt.text, Boolean(opt.imageUrl));
+                                  return (
+                                    <div
+                                      key={opt.id}
+                                      className={`p-2 rounded-lg border text-xs flex flex-col gap-1.5 ${
+                                        opt.isCorrect
+                                          ? 'bg-emerald-950/40 border-emerald-700/60 text-emerald-200 font-medium'
+                                          : 'bg-zinc-900 border-zinc-800 text-zinc-300'
+                                      }`}
+                                    >
+                                      <div className="flex items-center justify-between gap-2">
+                                        {displayText ? (
+                                          <span>{displayText}</span>
+                                        ) : (
+                                          <span />
+                                        )}
+                                        {opt.isCorrect && (
+                                          <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-emerald-800 text-white font-bold shrink-0">
+                                            Richtig
+                                          </span>
+                                        )}
+                                      </div>
+                                      {opt.imageUrl && (
+                                        <img
+                                          src={opt.imageUrl}
+                                          alt={displayText || 'Antwortbild'}
+                                          referrerPolicy="no-referrer"
+                                          className="max-h-24 rounded-md border border-zinc-800 bg-black object-contain self-start"
+                                        />
+                                      )}
+                                    </div>
+                                  );
+                                })}
                               </div>
                             </div>
 
-                            {stat.question.explanation && (
-                              <div className="p-2.5 rounded-lg bg-zinc-900 border border-zinc-800 text-xs text-zinc-300">
-                                <span className="font-semibold text-white">Erklärung: </span>
+                            {stat.question.explanation && (viewerIsCoach || !stat.lastIsCorrect) && (
+                              <div className="p-2.5 rounded-lg bg-amber-950/30 border border-amber-700/40 text-xs text-amber-100 leading-relaxed">
+                                <span className="font-semibold text-amber-300">Trainer-Hinweis: </span>
                                 {stat.question.explanation}
                               </div>
                             )}

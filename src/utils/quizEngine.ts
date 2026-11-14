@@ -255,9 +255,126 @@ export interface PlayerWeeklySummary {
   bestScoreThisWeek: number;
   averageTimeThisWeek: number;
   averageAccuracyThisWeek: number;
+  currentStreak: number;
   lastAttemptDate?: string;
   totalPointsThisWeek: number;
   seasonTotalScore: number;
+}
+
+/**
+ * Counts consecutive error-free (passed) quiz attempts starting from the most recent attempt.
+ */
+export function calculateCurrentErrorFreeStreak(playerAttempts: QuizAttempt[]): number {
+  if (playerAttempts.length === 0) return 0;
+  const sortedDesc = [...playerAttempts].sort(
+    (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+  );
+  let streak = 0;
+  for (const att of sortedDesc) {
+    const isPassed = att.passed === true || att.correctCount === att.totalQuestions;
+    if (!isPassed) break;
+    streak += 1;
+  }
+  return streak;
+}
+
+/**
+ * Calculates the highest consecutive streak of error-free (passed) quiz attempts a player has ever achieved.
+ */
+export function calculateBestErrorFreeStreak(playerAttempts: QuizAttempt[]): number {
+  if (playerAttempts.length === 0) return 0;
+  const sortedAsc = [...playerAttempts].sort(
+    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+  );
+  let best = 0;
+  let current = 0;
+  for (const att of sortedAsc) {
+    const isPassed = att.passed === true || att.correctCount === att.totalQuestions;
+    if (isPassed) {
+      current += 1;
+      if (current > best) best = current;
+    } else {
+      current = 0;
+    }
+  }
+  return best;
+}
+
+export interface PlayerMedals {
+  gold: number;
+  silver: number;
+  bronze: number;
+}
+
+/**
+ * Calculates Gold (1st), Silver (2nd), and Bronze (3rd) weekly medals earned by each player
+ * across all completed weeks plus the currently active week's live top 3
+ * (whose medals transfer if overtaken).
+ */
+export function calculatePlayerMedals(
+  attempts: QuizAttempt[],
+  currentWeekKey: string = getWeekKey(),
+  validPlayerIds?: Set<string>
+): Map<string, PlayerMedals> {
+  const medalsByPlayer = new Map<string, PlayerMedals>();
+  const passedByWeek = new Map<string, QuizAttempt[]>();
+
+  for (const att of attempts) {
+    if (!att.weekKey || att.weekKey > currentWeekKey) continue;
+    if (validPlayerIds && !validPlayerIds.has(att.playerId)) continue;
+    const isPassed = att.passed === true || att.correctCount === att.totalQuestions;
+    if (!isPassed) continue;
+
+    const list = passedByWeek.get(att.weekKey) || [];
+    list.push(att);
+    passedByWeek.set(att.weekKey, list);
+  }
+
+  for (const weekAttempts of passedByWeek.values()) {
+    const bestByPlayer = new Map<string, { bestTime: number; earliestTimestamp: number }>();
+
+    for (const att of weekAttempts) {
+      const time = Math.round(att.totalTimeSeconds * 10) / 10;
+      const ts = new Date(att.timestamp).getTime();
+      const existing = bestByPlayer.get(att.playerId);
+
+      if (
+        !existing ||
+        time < existing.bestTime ||
+        (time === existing.bestTime && ts < existing.earliestTimestamp)
+      ) {
+        bestByPlayer.set(att.playerId, { bestTime: time, earliestTimestamp: ts });
+      }
+    }
+
+    const ranked = Array.from(bestByPlayer.entries()).sort(([idA, a], [idB, b]) => {
+      if (a.bestTime !== b.bestTime) return a.bestTime - b.bestTime;
+      if (a.earliestTimestamp !== b.earliestTimestamp) return a.earliestTimestamp - b.earliestTimestamp;
+      return idA.localeCompare(idB);
+    });
+
+    const medalKeys: Array<keyof PlayerMedals> = ['gold', 'silver', 'bronze'];
+    for (let i = 0; i < Math.min(3, ranked.length); i++) {
+      const playerId = ranked[i][0];
+      const current = medalsByPlayer.get(playerId) || { gold: 0, silver: 0, bronze: 0 };
+      current[medalKeys[i]] += 1;
+      medalsByPlayer.set(playerId, current);
+    }
+  }
+
+  return medalsByPlayer;
+}
+
+/**
+ * Hides auto-generated default placeholder text (e.g. "Antwort A", "Option B") when an option has an image.
+ */
+export function getOptionDisplayText(text: string, hasImage: boolean): string {
+  const trimmed = (text || '').trim();
+  if (!hasImage) return trimmed;
+  if (!trimmed || /^(Antwort|Option|Bild)\s*[A-Z0-9]+$/i.test(trimmed)) {
+    return '';
+  }
+  return trimmed;
 }
 
 /**
@@ -268,7 +385,9 @@ export function calculateWeeklyLeaderboard(
   attempts: QuizAttempt[],
   targetWeekKey: string
 ): PlayerWeeklySummary[] {
-  return players.map(player => {
+  const bestTimestampMap = new Map<string, number>();
+
+  const summaries = players.map(player => {
     const playerAttempts = attempts.filter(a => a.playerId === player.id);
     const thisWeekAttempts = playerAttempts.filter(a => a.weekKey === targetWeekKey);
 
@@ -285,6 +404,16 @@ export function calculateWeeklyLeaderboard(
       bestScoreThisWeek = Math.round(Math.min(...passedAttempts.map(a => a.totalTimeSeconds)) * 10) / 10;
       const totalPassedTime = passedAttempts.reduce((sum, a) => sum + a.totalTimeSeconds, 0);
       averageTimeThisWeek = Math.round((totalPassedTime / passedAttempts.length) * 10) / 10;
+
+      const bestAttempts = passedAttempts.filter(
+        a => Math.round(a.totalTimeSeconds * 10) / 10 === bestScoreThisWeek
+      );
+      if (bestAttempts.length > 0) {
+        bestTimestampMap.set(
+          player.id,
+          Math.min(...bestAttempts.map(a => new Date(a.timestamp).getTime()))
+        );
+      }
     }
 
     let totalPointsThisWeek = 0;
@@ -301,6 +430,7 @@ export function calculateWeeklyLeaderboard(
       ? Math.round((totalCorrectThisWeek / totalQuestionsThisWeek) * 100) 
       : 0;
 
+    const currentStreak = calculateCurrentErrorFreeStreak(playerAttempts);
     const seasonTotalScore = playerAttempts.reduce((acc, a) => acc + a.totalScore, 0);
 
     // Get latest attempt timestamp
@@ -317,16 +447,25 @@ export function calculateWeeklyLeaderboard(
       bestScoreThisWeek,
       averageTimeThisWeek,
       averageAccuracyThisWeek,
+      currentStreak,
       lastAttemptDate,
       totalPointsThisWeek,
       seasonTotalScore
     };
-  }).sort((a, b) => {
+  });
+
+  return summaries.sort((a, b) => {
     // Priority: completed/passed players first, sorted by lowest time (bestScoreThisWeek) ascending
     if (a.hasCompletedThisWeek && !b.hasCompletedThisWeek) return -1;
     if (!a.hasCompletedThisWeek && b.hasCompletedThisWeek) return 1;
     if (a.hasCompletedThisWeek && b.hasCompletedThisWeek) {
-      return a.bestScoreThisWeek - b.bestScoreThisWeek;
+      if (a.bestScoreThisWeek !== b.bestScoreThisWeek) {
+        return a.bestScoreThisWeek - b.bestScoreThisWeek;
+      }
+      const tsA = bestTimestampMap.get(a.player.id) ?? Infinity;
+      const tsB = bestTimestampMap.get(b.player.id) ?? Infinity;
+      if (tsA !== tsB) return tsA - tsB;
+      return a.player.id.localeCompare(b.player.id);
     }
     return b.attemptsThisWeek - a.attemptsThisWeek;
   });
@@ -370,6 +509,7 @@ export function calculateAllTimeLeaderboard(
       ? Math.round((totalCorrectThisWeek / totalQuestionsThisWeek) * 100) 
       : 0;
 
+    const currentStreak = calculateCurrentErrorFreeStreak(playerAttempts);
     const seasonTotalScore = playerAttempts.reduce((acc, a) => acc + a.totalScore, 0);
 
     const sortedAttempts = [...playerAttempts].sort(
@@ -385,6 +525,7 @@ export function calculateAllTimeLeaderboard(
       bestScoreThisWeek,
       averageTimeThisWeek,
       averageAccuracyThisWeek,
+      currentStreak,
       lastAttemptDate,
       totalPointsThisWeek,
       seasonTotalScore

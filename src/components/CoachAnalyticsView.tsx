@@ -5,9 +5,11 @@ import {
   calculateWeeklyLeaderboard,
   calculateWeeklyTrends,
   filterQuestionsForTeam,
-  getWeekKey
+  getWeekKey,
+  PlayerMedals
 } from '../utils/quizEngine';
 import { getRegistrationUrl } from '../lib/firebase';
+import { PlayerLabel } from './PlayerLabel';
 import {
   Star,
   ArrowUpRight,
@@ -24,6 +26,7 @@ interface CoachAnalyticsViewProps {
   questions: Question[];
   attempts: QuizAttempt[];
   teams: Team[];
+  medalsByPlayer?: Map<string, PlayerMedals>;
   selectedTeamId: string;
   onSelectTeamId: (teamId: string) => void;
   onOpenTeamConfig?: (team: Team) => void;
@@ -36,6 +39,7 @@ export const CoachAnalyticsView: React.FC<CoachAnalyticsViewProps> = ({
   questions,
   attempts,
   teams,
+  medalsByPlayer,
   selectedTeamId,
   onSelectTeamId,
   onOpenTeamConfig,
@@ -57,7 +61,7 @@ export const CoachAnalyticsView: React.FC<CoachAnalyticsViewProps> = ({
     ? attempts.filter(
         a =>
           teamPlayerIdSet.has(a.playerId) &&
-          (!a.teamId || a.teamId === activeTeam.id)
+          a.teamId === activeTeam.id
       )
     : attempts;
 
@@ -222,7 +226,7 @@ export const CoachAnalyticsView: React.FC<CoachAnalyticsViewProps> = ({
                     />
                   </div>
                   <div className="text-[11px] text-zinc-400 font-mono tabular-nums">
-                    {wk.averageScore > 0 ? `Ø Zeit: ${wk.averageScore}s` : 'Kein Durchgang bestanden'}
+                    {wk.averageScore > 0 ? `Ø Zeit: ${wk.averageScore.toFixed(1)}s` : 'Kein Durchgang bestanden'}
                   </div>
                 </div>
               );
@@ -327,10 +331,13 @@ export const CoachAnalyticsView: React.FC<CoachAnalyticsViewProps> = ({
                   className="w-full flex items-center justify-between py-3 text-left hover:bg-zinc-800/50 transition-colors min-h-[56px]"
                 >
                   <div>
-                    <div className="text-sm font-semibold text-white">
-                      {summary.player.name}
+                    <div className="text-sm font-semibold text-white flex items-center gap-2">
+                      <PlayerLabel
+                        name={summary.player.name}
+                        medals={medalsByPlayer?.get(summary.player.id)}
+                      />
                       {summary.player.role === 'coach' && (
-                        <span className="text-red-400 font-medium ml-2 text-[11px]">Trainer</span>
+                        <span className="text-red-400 font-medium text-[11px]">Trainer</span>
                       )}
                     </div>
                     <div className="text-xs text-zinc-400 tabular-nums mt-0.5">

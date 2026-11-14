@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Question, QuizOption, Team } from '../types/basketball';
+import { getOptionDisplayText } from '../utils/quizEngine';
 import { X, Plus, Trash2, Check, Star, Image as ImageIcon } from 'lucide-react';
 
 interface QuestionEditorModalProps {
@@ -80,6 +81,7 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
     question?.teamIds ?? defaultTeamIds
   );
   const [newTagInput, setNewTagInput] = useState('');
+  const [coachNote, setCoachNote] = useState(question?.explanation || '');
   const [options, setOptions] = useState<QuizOption[]>(
     question?.options && question.options.length >= 2
       ? question.options
@@ -94,9 +96,13 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
       setSelectedTags(question?.tags ?? []);
       setSelectedTeamIds(question ? (question.teamIds ?? []) : defaultTeamIds);
       setNewTagInput('');
+      setCoachNote(question?.explanation || '');
       setOptions(
         question?.options && question.options.length >= 2
-          ? question.options
+          ? question.options.map(o => ({
+              ...o,
+              text: getOptionDisplayText(o.text, Boolean(o.imageUrl))
+            }))
           : DEFAULT_OPTIONS.map(o => ({ ...o }))
       );
     }
@@ -126,7 +132,9 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
 
     const validatedOptions = options.map((opt, idx) => ({
       id: opt.id,
-      text: opt.text.trim() || `Antwort ${String.fromCharCode(65 + idx)}`,
+      text: opt.imageUrl
+        ? getOptionDisplayText(opt.text, true)
+        : (opt.text.trim() || `Antwort ${String.fromCharCode(65 + idx)}`),
       isCorrect: opt.isCorrect,
       ...(opt.imageUrl ? { imageUrl: opt.imageUrl } : {})
     }));
@@ -144,7 +152,7 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
       isPriorityFocus,
       tags: selectedTags,
       teamIds: selectedTeamIds.length > 0 ? selectedTeamIds : undefined,
-      explanation: '',
+      explanation: coachNote.trim().slice(0, 1000),
       options: validatedOptions,
       imageUrl: imageUrl.trim() ? imageUrl.trim() : undefined,
       createdAt: question?.createdAt || new Date().toISOString()
@@ -441,7 +449,7 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
 
                   <input
                     type="text"
-                    required
+                    required={!opt.imageUrl}
                     value={opt.text}
                     onChange={e =>
                       setOptions(
@@ -450,7 +458,7 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
                         )
                       )
                     }
-                    placeholder={`Antwort ${String.fromCharCode(65 + idx)}`}
+                    placeholder={opt.imageUrl ? 'Text (optional)' : `Antwort ${String.fromCharCode(65 + idx)}`}
                     className="flex-1 bg-transparent text-sm text-white placeholder-zinc-500 focus:outline-none"
                   />
 
@@ -523,6 +531,30 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
                 )}
               </div>
             ))}
+          </div>
+
+          {/* Coach Note (shown only when answered incorrectly) */}
+          <div className="p-3.5 rounded-xl bg-zinc-950 border border-zinc-800 space-y-2">
+            <div>
+              <label
+                htmlFor="question-coach-note"
+                className="block text-xs font-semibold text-white"
+              >
+                Trainer-Hinweis bei falscher Antwort (optional)
+              </label>
+              <p className="text-[11px] text-zinc-400 mt-0.5">
+                Wird Spielern nur angezeigt, wenn die Frage falsch beantwortet wurde.
+              </p>
+            </div>
+            <textarea
+              id="question-coach-note"
+              rows={3}
+              maxLength={1000}
+              value={coachNote}
+              onChange={e => setCoachNote(e.target.value)}
+              placeholder="z. B. Warum diese Option richtig ist oder worauf im Ablauf besonders zu achten ist..."
+              className="w-full px-3 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-red-600 resize-none"
+            />
           </div>
         </form>
 

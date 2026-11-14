@@ -366,6 +366,14 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                         </span>
                       </>
                     )}
+                    {q.explanation && q.explanation.trim().length > 0 && (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span className="text-amber-300 font-medium" title={q.explanation}>
+                          Mit Hinweis
+                        </span>
+                      </>
+                    )}
                     <span aria-hidden="true">·</span>
                     {qStats && qStats.total > 0 ? (
                       <span

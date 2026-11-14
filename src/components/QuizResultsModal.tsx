@@ -1,11 +1,14 @@
 import React from 'react';
 import { QuizAttempt, Question, Player } from '../types/basketball';
+import { PlayerMedals, getOptionDisplayText } from '../utils/quizEngine';
+import { PlayerLabel } from './PlayerLabel';
 import { Check, X, RotateCcw, ArrowRight, Trophy } from 'lucide-react';
 
 interface QuizResultsModalProps {
   attempt: QuizAttempt | null;
   questions: Question[];
   player: Player;
+  medals?: PlayerMedals;
   isOpen: boolean;
   onClose: () => void;
   onRetake: () => void;
@@ -16,6 +19,7 @@ export const QuizResultsModal: React.FC<QuizResultsModalProps> = ({
   attempt,
   questions,
   player,
+  medals,
   isOpen,
   onClose,
   onRetake,
@@ -41,8 +45,9 @@ export const QuizResultsModal: React.FC<QuizResultsModalProps> = ({
             )}
           </div>
           <div>
-            <p className="text-xs font-medium text-zinc-400">
-              {player.name} · {passed ? 'Quiz erfolgreich bestanden! 🎉' : 'Quiz fehlgeschlagen ❌'}
+            <p className="text-xs font-medium text-zinc-400 flex items-center justify-center gap-1.5 flex-wrap">
+              <PlayerLabel name={player.name} medals={medals} />
+              <span>· {passed ? 'Quiz erfolgreich bestanden! 🎉' : 'Quiz fehlgeschlagen ❌'}</span>
             </p>
             <h2 className="text-3xl font-bold font-mono tabular-nums text-white mt-1">
               {attempt.totalTimeSeconds.toFixed(1)}s
@@ -84,10 +89,40 @@ export const QuizResultsModal: React.FC<QuizResultsModalProps> = ({
                   </span>
                 </div>
 
-                {!ans.isCorrect && correctOption && (
-                  <p className="text-zinc-400 pl-6">
-                    Richtig: <span className="font-medium text-zinc-100">{correctOption.text}</span>
-                  </p>
+                {!ans.isCorrect && correctOption && (() => {
+                  const correctText = getOptionDisplayText(
+                    correctOption.text,
+                    Boolean(correctOption.imageUrl)
+                  );
+                  return (
+                    <div className="pl-6 space-y-1.5">
+                      <p className="text-zinc-400">
+                        Richtig:{' '}
+                        {correctText ? (
+                          <span className="font-medium text-zinc-100">{correctText}</span>
+                        ) : (
+                          !correctOption.imageUrl && (
+                            <span className="font-medium text-zinc-100">{correctOption.text}</span>
+                          )
+                        )}
+                      </p>
+                      {correctOption.imageUrl && (
+                        <img
+                          src={correctOption.imageUrl}
+                          alt={correctText || 'Richtige Antwort'}
+                          referrerPolicy="no-referrer"
+                          className="max-h-24 rounded-lg border border-zinc-800 bg-black object-contain"
+                        />
+                      )}
+                    </div>
+                  );
+                })()}
+
+                {!ans.isCorrect && q.explanation && (
+                  <div className="ml-6 mt-1.5 p-2.5 rounded-lg bg-amber-950/35 border border-amber-700/50 text-amber-100 leading-relaxed">
+                    <span className="font-semibold text-amber-300">Trainer-Hinweis: </span>
+                    {q.explanation}
+                  </div>
                 )}
               </div>
             );

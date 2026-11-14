@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Question, QuizOption, QuizAttempt, QuizAttemptAnswer, Player } from '../types/basketball';
-import { getWeekKey } from '../utils/quizEngine';
+import { getWeekKey, getOptionDisplayText } from '../utils/quizEngine';
 import { playBuzzer, playSwish } from '../utils/audio';
 import { Timer, Check, X, Volume2, VolumeX } from 'lucide-react';
 
@@ -19,6 +19,7 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
   onFinishQuiz,
   onExit
 }) => {
+  const [countdown, setCountdown] = useState(3);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [timeRemaining, setTimeRemaining] = useState(timePerQuestion);
   const [selectedOptionId, setSelectedOptionId] = useState<string | null>(null);
@@ -33,9 +34,18 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
   const questionStartTimeRef = useRef<number>(Date.now());
   const transitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const isStarted = countdown <= 0;
   const currentQuestion = questions[currentIndex];
   const isLastQuestion = currentIndex === questions.length - 1;
   const [shuffledOptions, setShuffledOptions] = useState<QuizOption[]>([]);
+
+  useEffect(() => {
+    if (countdown <= 0) return;
+    const timeout = setTimeout(() => {
+      setCountdown(prev => prev - 1);
+    }, 1000);
+    return () => clearTimeout(timeout);
+  }, [countdown]);
 
   useEffect(() => {
     if (!currentQuestion) return;
@@ -46,10 +56,16 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
   const hasVisualOptions = shuffledOptions.some(o => Boolean(o.imageUrl));
 
   useEffect(() => {
+    if (!isStarted) return;
     startTimeRef.current = Date.now();
-  }, []);
+  }, [isStarted]);
 
   useEffect(() => {
+    if (!isStarted) {
+      if (timerRef.current) clearInterval(timerRef.current);
+      return;
+    }
+
     questionStartTimeRef.current = Date.now();
     setTimeRemaining(timePerQuestion);
 
@@ -71,7 +87,7 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [currentIndex, hasSubmittedAnswer, timePerQuestion]);
+  }, [isStarted, currentIndex, hasSubmittedAnswer, timePerQuestion]);
 
   // Unmount cleanup for transition timer
   useEffect(() => {
@@ -178,6 +194,46 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
 
   const isUrgent = timeRemaining <= 5 && !hasSubmittedAnswer;
 
+  if (!isStarted) {
+    return (
+      <div className="max-w-xl mx-auto px-4 py-8 flex flex-col items-center justify-center min-h-[75vh]">
+        <div className="w-full bg-zinc-900 border border-zinc-800 rounded-2xl p-8 text-center space-y-6">
+          <div className="space-y-1">
+            <p className="text-xs font-semibold uppercase tracking-wider text-red-400">
+              Quiz startet in
+            </p>
+            <p className="text-xs text-zinc-400">
+              {questions.length} {questions.length === 1 ? 'Frage' : 'Fragen'} · {timePerQuestion}s pro Frage
+            </p>
+          </div>
+
+          <div className="flex items-center justify-center py-2">
+            <div
+              key={countdown}
+              className="w-28 h-28 rounded-full bg-zinc-950 border-2 border-red-600/80 flex items-center justify-center shadow-lg shadow-red-950/30"
+            >
+              <span className="text-6xl font-bold font-mono tabular-nums text-white">
+                {countdown}
+              </span>
+            </div>
+          </div>
+
+          <p className="text-sm font-medium text-zinc-300">
+            Mach dich bereit...
+          </p>
+
+          <button
+            type="button"
+            onClick={onExit}
+            className="px-4 py-2 rounded-xl border border-zinc-800 bg-zinc-950 hover:bg-zinc-800 text-xs font-medium text-zinc-400 hover:text-white min-h-[40px] transition-colors"
+          >
+            Abbrechen
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-xl mx-auto px-4 py-4 flex flex-col min-h-[82vh] justify-between">
       {/* Top Quiz HUD */}
@@ -257,6 +313,7 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
           {shuffledOptions.map(opt => {
             const isSelected = selectedOptionId === opt.id;
             const isCorrect = opt.isCorrect;
+            const displayText = getOptionDisplayText(opt.text, Boolean(opt.imageUrl));
 
             let cardStyle = 'bg-zinc-950 border-zinc-800 text-zinc-100 hover:border-zinc-600 hover:bg-zinc-800/50';
             if (hasSubmittedAnswer) {
@@ -276,27 +333,33 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
                 onClick={() => handleSelectOption(opt)}
                 className={`w-full text-left p-3.5 rounded-xl border transition-colors flex flex-col gap-2.5 min-h-[52px] ${cardStyle}`}
               >
-                <div className="flex items-start justify-between gap-3 w-full">
-                  <span className="flex-1 text-sm font-medium leading-snug">
-                    {opt.text}
-                  </span>
+                {(displayText || (hasSubmittedAnswer && (isCorrect || isSelected))) && (
+                  <div className="flex items-start justify-between gap-3 w-full">
+                    {displayText ? (
+                      <span className="flex-1 text-sm font-medium leading-snug">
+                        {displayText}
+                      </span>
+                    ) : (
+                      <span className="flex-1" />
+                    )}
 
-                  {hasSubmittedAnswer && (
-                    <span className="shrink-0 mt-0.5">
-                      {isCorrect ? (
-                        <Check className="w-4 h-4 text-emerald-400" />
-                      ) : isSelected ? (
-                        <X className="w-4 h-4 text-red-400" />
-                      ) : null}
-                    </span>
-                  )}
-                </div>
+                    {hasSubmittedAnswer && (
+                      <span className="shrink-0 mt-0.5">
+                        {isCorrect ? (
+                          <Check className="w-4 h-4 text-emerald-400" />
+                        ) : isSelected ? (
+                          <X className="w-4 h-4 text-red-400" />
+                        ) : null}
+                      </span>
+                    )}
+                  </div>
+                )}
 
                 {opt.imageUrl && (
                   <div className="w-full rounded-lg overflow-hidden border border-zinc-800 max-h-36 bg-black">
                     <img
                       src={opt.imageUrl}
-                      alt={opt.text}
+                      alt={displayText || 'Antwortbild'}
                       referrerPolicy="no-referrer"
                       className="w-full h-full object-contain max-h-36"
                     />

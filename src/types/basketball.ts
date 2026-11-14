@@ -99,6 +99,7 @@ export interface Team {
   id: string;
   name: string;
   playerIds: string[];
+  isDefault?: boolean;
   questionCount: number;
   timePerQuestionSeconds: number;
   prioritizeFocusQuestions: boolean;

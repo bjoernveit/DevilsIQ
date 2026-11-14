@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Player, QuizAttempt, Team } from '../types/basketball';
-import { calculateWeeklyLeaderboard, calculateAllTimeLeaderboard, getWeekKey } from '../utils/quizEngine';
+import { calculateWeeklyLeaderboard, calculateAllTimeLeaderboard, getWeekKey, PlayerMedals } from '../utils/quizEngine';
+import { PlayerLabel } from './PlayerLabel';
+import { Flame } from 'lucide-react';
 
 interface LeaderboardViewProps {
   players: Player[];
@@ -8,6 +10,7 @@ interface LeaderboardViewProps {
   currentPlayerId: string;
   activeTeam?: Team | null;
   teams?: Team[];
+  medalsByPlayer?: Map<string, PlayerMedals>;
   onSelectPlayerDetail?: (player: Player) => void;
   viewerIsCoach?: boolean;
   embedded?: boolean;
@@ -19,6 +22,7 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
   currentPlayerId,
   activeTeam = null,
   teams = [],
+  medalsByPlayer,
   onSelectPlayerDetail,
   viewerIsCoach = false,
   embedded = false
@@ -33,13 +37,23 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
     setScopeMode(activeTeam ? 'team' : 'club');
   }, [activeTeam?.id]);
 
-  const isTeamScoped = Boolean(activeTeam && scopeMode === 'team');
+  const effectiveScopeMode = viewerIsCoach ? scopeMode : activeTeam ? 'team' : 'club';
+  const isTeamScoped = Boolean(activeTeam && effectiveScopeMode === 'team');
   const scopedPlayers = isTeamScoped && activeTeam
-    ? players.filter(p => activeTeam.playerIds.includes(p.id))
-    : players;
+    ? players.filter(
+        p =>
+          activeTeam.playerIds.includes(p.id) ||
+          (p.role === 'coach' &&
+            attempts.some(a => a.playerId === p.id && a.teamId === activeTeam.id))
+      )
+    : viewerIsCoach
+    ? players
+    : players.filter(p => p.id === currentPlayerId);
   const scopedAttempts = isTeamScoped && activeTeam
-    ? attempts.filter(a => !a.teamId || a.teamId === activeTeam.id)
-    : attempts;
+    ? attempts.filter(a => a.teamId === activeTeam.id)
+    : viewerIsCoach
+    ? attempts
+    : attempts.filter(a => a.playerId === currentPlayerId);
 
   const leaderboardData = boardType === 'weekly'
     ? calculateWeeklyLeaderboard(scopedPlayers, scopedAttempts, selectedWeek)
@@ -146,7 +160,7 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
           </button>
         </div>
 
-        {activeTeam && (
+        {viewerIsCoach && activeTeam && (
           <div className="inline-flex items-center gap-1 p-1 bg-zinc-900 border border-zinc-800 rounded-xl">
             <button
               type="button"
@@ -185,6 +199,7 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
               ? teams.filter(t => t.playerIds.includes(item.player.id)).map(t => t.name)
               : [];
 
+            const medals = medalsByPlayer?.get(item.player.id);
             const rowContent = (
               <>
                 <div className="flex items-center gap-3 min-w-0">
@@ -193,9 +208,12 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
                   </span>
 
                   <div className="min-w-0">
-                    <div className="text-sm font-semibold text-white truncate">
-                      {item.player.name}
-                      {isMe && <span className="text-red-400 font-normal ml-1.5 text-xs">(Du)</span>}
+                    <div className="text-sm font-semibold text-white flex items-center gap-1.5 min-w-0">
+                      <PlayerLabel name={item.player.name} medals={medals} />
+                      {item.player.role === 'coach' && (
+                        <span className="text-red-400 font-medium text-[11px] shrink-0">Trainer</span>
+                      )}
+                      {isMe && <span className="text-red-400 font-normal text-xs shrink-0">(Du)</span>}
                     </div>
                     <div className="text-xs text-zinc-400 tabular-nums truncate">
                       {item.attemptsThisWeek} {item.attemptsThisWeek === 1 ? 'Versuch' : 'Versuche'}
@@ -206,6 +224,27 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
 
                 <div className="flex items-center gap-4 shrink-0 text-right">
                   <div>
+                    <div
+                      className={`text-sm font-bold font-mono tabular-nums inline-flex items-center justify-end gap-1 ${
+                        item.currentStreak > 0 ? 'text-amber-400' : 'text-zinc-500'
+                      }`}
+                      title={`${item.currentStreak} ${item.currentStreak === 1 ? 'Durchgang' : 'Durchgänge'} in Folge ohne Fehler`}
+                    >
+                      <Flame
+                        className={`w-3.5 h-3.5 ${
+                          item.currentStreak > 0
+                            ? 'fill-amber-400/20 text-amber-400'
+                            : 'text-zinc-600'
+                        }`}
+                      />
+                      <span>{item.currentStreak}</span>
+                    </div>
+                    <div className="text-[11px] text-zinc-400">
+                      Serie
+                    </div>
+                  </div>
+
+                  <div className="min-w-[54px]">
                     <div className="text-sm font-bold font-mono tabular-nums text-white">
                       {item.bestScoreThisWeek > 0 ? `${item.bestScoreThisWeek.toFixed(1)}s` : '—'}
                     </div>

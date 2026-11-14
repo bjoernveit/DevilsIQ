@@ -167,6 +167,9 @@
           "maxLength": 128,
           "pattern": "^[a-zA-Z0-9_\\-]+$"
         },
+        "passed": {
+          "type": "boolean"
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time"
@@ -265,6 +268,9 @@
         },
         "selectedTags": {
           "type": "array"
+        },
+        "isDefault": {
+          "type": "boolean"
         },
         "createdBy": {
           "type": "string",

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { collection, doc, onSnapshot, query, where } from 'firebase/firestore';
 import { Player, Question, QuizAttempt, QuizConfig, Team } from './types/basketball';
@@ -6,7 +6,9 @@ import { ALL_TAGS } from './data/initialData';
 import {
   filterQuestionsForTeam,
   generateQuizSession,
-  getTeamQuizConfig
+  getTeamQuizConfig,
+  calculatePlayerMedals,
+  getWeekKey
 } from './utils/quizEngine';
 import {
   auth,
@@ -28,6 +30,7 @@ import {
   removeTopicLabelFromFirestore,
   createTeamInFirestore,
   updateTeamInFirestore,
+  setDefaultTeamInFirestore,
   deleteTeamFromFirestore,
   toIsoString
 } from './lib/firebase';
@@ -42,6 +45,7 @@ import { QuestionEditorModal } from './components/QuestionEditorModal';
 import { PlayerDetailModal } from './components/PlayerDetailModal';
 import { QuizResultsModal } from './components/QuizResultsModal';
 import { QuizConfigModal } from './components/QuizConfigModal';
+import { PlayerLabel } from './components/PlayerLabel';
 import { Play, ClipboardList, SlidersHorizontal } from 'lucide-react';
 
 type TabType = 'quiz' | 'coach';
@@ -200,7 +204,8 @@ export default function App() {
               totalQuestions: Number(data.totalQuestions || 1),
               totalTimeSeconds: Number(data.totalTimeSeconds || 0),
               maxStreak: Number(data.maxStreak || 0),
-              answers: Array.isArray(data.answers) ? data.answers : []
+              answers: Array.isArray(data.answers) ? data.answers : [],
+              passed: typeof data.passed === 'boolean' ? data.passed : undefined
             } as QuizAttempt;
           })
           .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
@@ -222,6 +227,7 @@ export default function App() {
               id: docSnap.id,
               name: String(data.name || ''),
               playerIds: Array.isArray(data.playerIds) ? data.playerIds.map(String) : [],
+              isDefault: Boolean(data.isDefault),
               questionCount: Number(data.questionCount || DEFAULT_QUIZ_CONFIG.questionCount),
               timePerQuestionSeconds: Number(
                 data.timePerQuestionSeconds || DEFAULT_QUIZ_CONFIG.timePerQuestionSeconds
@@ -301,6 +307,12 @@ export default function App() {
     };
   }, [firebaseUser, profileReady]);
 
+  const currentWeekKey = getWeekKey();
+  const medalsByPlayer = useMemo(() => {
+    const validIds = new Set(players.map(p => p.id));
+    return calculatePlayerMedals(attempts, currentWeekKey, validIds);
+  }, [attempts, currentWeekKey, players]);
+
   if (!authReady || (firebaseUser && !profileReady)) {
     return (
       <div className="min-h-screen bg-[#09090B] flex items-center justify-center text-xs text-zinc-400">
@@ -328,25 +340,57 @@ export default function App() {
     ? teams
     : teams.filter(t => t.playerIds.includes(currentPlayer.id));
 
-  const activePlayerTeam = isCoach
-    ? (playerSelectedTeamId ? teams.find(t => t.id === playerSelectedTeamId) || null : null)
-    : (selectableTeams.find(t => t.id === playerSelectedTeamId) || selectableTeams[0] || null);
+  const activePlayerTeam =
+    selectableTeams.find(t => t.id === playerSelectedTeamId) ||
+    selectableTeams.find(t => t.isDefault) ||
+    selectableTeams[0] ||
+    null;
 
   const effectivePlayerConfig = getTeamQuizConfig(activePlayerTeam, quizConfig);
   const effectivePlayerQuestions = activePlayerTeam
     ? filterQuestionsForTeam(questions, activePlayerTeam.id)
-    : teams.length > 0
-    ? filterQuestionsForTeam(questions, null)
-    : questions;
+    : [];
+
+  // Enforce strict team isolation for non-coach players:
+  // Players can only ever see people in their own team(s), never players in other teams.
+  const myTeamIds = new Set(selectableTeams.map(t => t.id));
+  const visibleTeammateIds = new Set<string>([currentPlayer.id]);
+  if (!isCoach) {
+    for (const t of selectableTeams) {
+      for (const pid of t.playerIds) {
+        visibleTeammateIds.add(pid);
+      }
+    }
+    for (const p of players) {
+      if (
+        p.role === 'coach' &&
+        attempts.some(a => a.playerId === p.id && a.teamId && myTeamIds.has(a.teamId))
+      ) {
+        visibleTeammateIds.add(p.id);
+      }
+    }
+  }
+
+  const visibleTeams = isCoach ? teams : selectableTeams;
+  const visiblePlayers = isCoach
+    ? players
+    : players.filter(p => visibleTeammateIds.has(p.id));
+  const visibleAttempts = isCoach
+    ? attempts
+    : attempts.filter(
+        a => visibleTeammateIds.has(a.playerId) && (!a.teamId || myTeamIds.has(a.teamId))
+      );
 
   const handleStartQuiz = () => {
+    if (!activePlayerTeam) return;
     const sessionQuestions = generateQuizSession(
       effectivePlayerQuestions,
-      effectivePlayerConfig
+      effectivePlayerConfig,
+      activePlayerTeam.id
     );
     if (sessionQuestions.length === 0) return;
     setActiveQuizQuestions(sessionQuestions);
-    setActiveQuizTeamId(activePlayerTeam?.id);
+    setActiveQuizTeamId(activePlayerTeam.id);
     setActiveQuizTimeSeconds(effectivePlayerConfig.timePerQuestionSeconds);
     setIsQuizActive(true);
   };
@@ -508,10 +552,13 @@ export default function App() {
 
         <button
           onClick={() => setIsProfileOpen(true)}
-          className="px-3 py-1.5 rounded-lg border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 text-xs font-medium text-zinc-200 whitespace-nowrap shrink-0 min-h-[36px] transition-colors"
+          className="px-3 py-1.5 rounded-lg border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 text-xs font-medium text-zinc-200 whitespace-nowrap shrink-0 min-h-[36px] transition-colors flex items-center"
           aria-label="Kontoeinstellungen öffnen"
         >
-          {currentPlayer.name}
+          <PlayerLabel
+            name={currentPlayer.name}
+            medals={medalsByPlayer.get(currentPlayer.id)}
+          />
         </button>
       </header>
 
@@ -528,21 +575,26 @@ export default function App() {
         ) : effectiveTab === 'quiz' ? (
           <PlayerHomeView
             player={currentPlayer}
-            players={players}
-            attempts={attempts}
-            teams={teams}
+            players={visiblePlayers}
+            attempts={visibleAttempts}
+            teams={visibleTeams}
             selectableTeams={selectableTeams}
             activeTeam={activePlayerTeam}
             onSelectTeamId={setPlayerSelectedTeamId}
             quizConfig={effectivePlayerConfig}
             questionCount={effectivePlayerQuestions.length}
             isCoach={isCoach}
+            medalsByPlayer={medalsByPlayer}
             onStartQuiz={handleStartQuiz}
             onOpenConfig={() => openConfigModalForTeam(activePlayerTeam)}
             onSelectPlayerDetail={handleSelectPlayerDetail}
             onGoToCoachQuestions={() => {
               setActiveTab('coach');
               setCoachSubTab('questions');
+            }}
+            onGoToCoachTeams={() => {
+              setActiveTab('coach');
+              setCoachSubTab('teams');
             }}
           />
         ) : (
@@ -604,7 +656,7 @@ export default function App() {
                         teams.find(t => t.id === coachAnalyticsTeamFilter) || null;
                       openConfigModalForTeam(filteredTeam);
                     } else {
-                      openConfigModalForTeam(null);
+                      openConfigModalForTeam(activePlayerTeam);
                     }
                   }}
                   className="p-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-300 hover:bg-zinc-800 hover:text-white min-h-[40px] min-w-[40px] flex items-center justify-center transition-colors"
@@ -622,6 +674,7 @@ export default function App() {
                 questions={questions}
                 attempts={attempts}
                 teams={teams}
+                medalsByPlayer={medalsByPlayer}
                 selectedTeamId={coachAnalyticsTeamFilter}
                 onSelectTeamId={setCoachAnalyticsTeamFilter}
                 onOpenTeamConfig={team => openConfigModalForTeam(team)}
@@ -633,10 +686,12 @@ export default function App() {
                 teams={teams}
                 players={players}
                 questions={questions}
+                medalsByPlayer={medalsByPlayer}
                 selectedTeamId={coachSelectedTeamId}
                 onSelectTeamId={setCoachSelectedTeamId}
                 onCreateTeam={name => createTeamInFirestore(name, firebaseUser.uid, quizConfig)}
                 onUpdateTeam={(teamId, updates) => updateTeamInFirestore(teamId, updates)}
+                onSetDefaultTeam={teamId => setDefaultTeamInFirestore(teamId, teams)}
                 onDeleteTeam={teamId => deleteTeamFromFirestore(teamId, questions)}
                 onOpenTeamConfig={team => openConfigModalForTeam(team)}
                 onGoToTeamQuestions={teamId => {
@@ -734,6 +789,7 @@ export default function App() {
         player={selectedPlayerForDetail}
         attempts={attempts}
         questions={questions}
+        medals={selectedPlayerForDetail ? medalsByPlayer.get(selectedPlayerForDetail.id) : undefined}
         isOpen={isPlayerDetailOpen}
         onClose={() => {
           setIsPlayerDetailOpen(false);
@@ -756,6 +812,7 @@ export default function App() {
         attempt={latestAttempt}
         questions={questions}
         player={currentPlayer}
+        medals={medalsByPlayer.get(currentPlayer.id)}
         isOpen={isResultsOpen}
         onClose={() => setIsResultsOpen(false)}
         onRetake={() => {

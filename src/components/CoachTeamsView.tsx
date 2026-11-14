@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Player, Question, Team } from '../types/basketball';
-import { filterQuestionsForTeam } from '../utils/quizEngine';
+import { filterQuestionsForTeam, PlayerMedals } from '../utils/quizEngine';
+import { PlayerLabel } from './PlayerLabel';
 import {
   Plus,
   Search,
@@ -8,13 +9,15 @@ import {
   Trash2,
   Check,
   Edit3,
-  BookOpen
+  BookOpen,
+  UserPlus
 } from 'lucide-react';
 
 interface CoachTeamsViewProps {
   teams: Team[];
   players: Player[];
   questions: Question[];
+  medalsByPlayer?: Map<string, PlayerMedals>;
   selectedTeamId: string | null;
   onSelectTeamId: (teamId: string | null) => void;
   onCreateTeam: (name: string) => Promise<string>;
@@ -22,6 +25,7 @@ interface CoachTeamsViewProps {
     teamId: string,
     updates: { name?: string; playerIds?: string[] }
   ) => Promise<void>;
+  onSetDefaultTeam: (teamId: string | null) => Promise<void>;
   onDeleteTeam: (teamId: string) => Promise<void>;
   onOpenTeamConfig: (team: Team) => void;
   onGoToTeamQuestions: (teamId: string) => void;
@@ -31,10 +35,12 @@ export const CoachTeamsView: React.FC<CoachTeamsViewProps> = ({
   teams,
   players,
   questions,
+  medalsByPlayer,
   selectedTeamId,
   onSelectTeamId,
   onCreateTeam,
   onUpdateTeam,
+  onSetDefaultTeam,
   onDeleteTeam,
   onOpenTeamConfig,
   onGoToTeamQuestions
@@ -144,6 +150,19 @@ export const CoachTeamsView: React.FC<CoachTeamsViewProps> = ({
     }
   };
 
+  const handleToggleDefaultTeam = async () => {
+    if (!activeTeam || isSaving) return;
+    setErrorMsg(null);
+    setIsSaving(true);
+    try {
+      await onSetDefaultTeam(activeTeam.isDefault ? null : activeTeam.id);
+    } catch {
+      setErrorMsg('Standard-Team konnte nicht gespeichert werden.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const sortedPlayers = [...players].sort((a, b) => a.name.localeCompare(b.name, 'de'));
   const filteredPlayers = sortedPlayers.filter(p =>
     p.name.toLowerCase().includes(playerSearch.trim().toLowerCase()) ||
@@ -212,13 +231,26 @@ export const CoachTeamsView: React.FC<CoachTeamsViewProps> = ({
                   key={team.id}
                   type="button"
                   onClick={() => onSelectTeamId(team.id)}
-                  className={`px-3.5 py-2 rounded-xl text-xs font-medium whitespace-nowrap shrink-0 transition-colors min-h-[38px] tabular-nums ${
+                  className={`px-3.5 py-2 rounded-xl text-xs font-medium whitespace-nowrap shrink-0 transition-colors min-h-[38px] tabular-nums inline-flex items-center gap-1.5 ${
                     isSelected
                       ? 'bg-red-700 text-white font-semibold'
                       : 'bg-zinc-900 border border-zinc-800 text-zinc-300 hover:bg-zinc-800'
                   }`}
                 >
-                  {team.name} ({team.playerIds.length})
+                  <span>
+                    {team.name} ({team.playerIds.length})
+                  </span>
+                  {team.isDefault && (
+                    <span
+                      className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${
+                        isSelected
+                          ? 'bg-black/25 text-white'
+                          : 'bg-emerald-950 text-emerald-300 border border-emerald-800/60'
+                      }`}
+                    >
+                      Standard
+                    </span>
+                  )}
                 </button>
               );
             })}
@@ -288,9 +320,29 @@ export const CoachTeamsView: React.FC<CoachTeamsViewProps> = ({
                         {teamApplicableQuestions.length} aktive Fragen ({teamSpecificCount} Team, {globalQuestionCount} Alle)
                       </span>
                     </div>
+                    {activeTeam.isDefault && (
+                      <p className="text-[11px] text-emerald-400 mt-1.5">
+                        Standard-Team: Neue Spieler werden bei der Registrierung automatisch hinzugefügt.
+                      </p>
+                    )}
                   </div>
 
                   <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                    <button
+                      type="button"
+                      disabled={isSaving}
+                      onClick={handleToggleDefaultTeam}
+                      className={`px-3 py-2 rounded-xl border text-xs font-semibold inline-flex items-center gap-1.5 min-h-[38px] whitespace-nowrap transition-colors ${
+                        activeTeam.isDefault
+                          ? 'border-emerald-700/70 bg-emerald-950/60 hover:bg-emerald-900/50 text-emerald-200'
+                          : 'border-zinc-700 bg-zinc-800 hover:bg-zinc-700 text-zinc-200'
+                      }`}
+                      title="Neue Spieler bei Registrierung automatisch diesem Team hinzufügen"
+                    >
+                      <UserPlus className="w-3.5 h-3.5" />
+                      <span>{activeTeam.isDefault ? 'Standard-Team ✓' : 'Als Standard-Team'}</span>
+                    </button>
+
                     <button
                       type="button"
                       onClick={() => onOpenTeamConfig(activeTeam)}
@@ -427,10 +479,13 @@ export const CoachTeamsView: React.FC<CoachTeamsViewProps> = ({
                             </span>
 
                             <div className="min-w-0">
-                              <div className="text-xs font-semibold text-white truncate">
-                                {member.name}
+                              <div className="text-xs font-semibold text-white flex items-center gap-1.5 min-w-0">
+                                <PlayerLabel
+                                  name={member.name}
+                                  medals={medalsByPlayer?.get(member.id)}
+                                />
                                 {member.role === 'coach' && (
-                                  <span className="text-red-400 font-medium ml-1.5 text-[11px]">
+                                  <span className="text-red-400 font-medium text-[11px] shrink-0">
                                     Trainer
                                   </span>
                                 )}

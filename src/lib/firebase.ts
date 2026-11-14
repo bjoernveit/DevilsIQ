@@ -20,6 +20,7 @@ import {
   deleteDoc,
   deleteField,
   writeBatch,
+  runTransaction,
   serverTimestamp,
   Timestamp
 } from 'firebase/firestore';
@@ -209,92 +210,142 @@ export class AccountDeletedError extends Error {
   }
 }
 
+const inFlightProfileEnsures = new Map<string, Promise<void>>();
+
+async function addPlayerToDefaultTeam(uid: string): Promise<void> {
+  try {
+    const defaultTeamsQuery = query(
+      collection(db, 'teams'),
+      where('isDefault', '==', true)
+    );
+    const snapshot = await getDocs(defaultTeamsQuery);
+    if (snapshot.empty) return;
+
+    for (const teamDoc of snapshot.docs) {
+      await runTransaction(db, async transaction => {
+        const freshSnap = await transaction.get(teamDoc.ref);
+        if (!freshSnap.exists()) return;
+        const data = freshSnap.data();
+        if (data.isDefault !== true) return;
+        const existingIds: string[] = Array.isArray(data.playerIds)
+          ? data.playerIds.map(String)
+          : [];
+        if (existingIds.includes(uid) || existingIds.length >= 100) return;
+
+        transaction.update(teamDoc.ref, {
+          playerIds: [...existingIds, uid],
+          updatedAt: serverTimestamp()
+        });
+      });
+    }
+  } catch (error) {
+    // Log without blocking user signup if no default team permissions apply
+    console.warn('Could not auto-assign default team:', error);
+  }
+}
+
 /**
  * Creates a Firestore profile for an authenticated user if missing.
  * First account ever created becomes Coach atomically via team_meta/bootstrap.
+ * Subsequent newly registered players are automatically added to the default team (if configured).
  */
 export async function ensureUserProfileExists(user: User, preferredUsername?: string): Promise<void> {
-  const deletedRef = doc(db, 'deleted_users', user.uid);
-  let deletedSnap;
+  const existingPromise = inFlightProfileEnsures.get(user.uid);
+  if (existingPromise) {
+    return existingPromise;
+  }
+
+  const run = (async () => {
+    const deletedRef = doc(db, 'deleted_users', user.uid);
+    let deletedSnap;
+    try {
+      deletedSnap = await getDoc(deletedRef);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.GET, `deleted_users/${user.uid}`);
+    }
+
+    if (deletedSnap.exists()) {
+      await firebaseSignOut(auth);
+      throw new AccountDeletedError();
+    }
+
+    const userRef = doc(db, 'users', user.uid);
+    let existingSnap;
+    try {
+      existingSnap = await getDoc(userRef);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.GET, `users/${user.uid}`);
+    }
+
+    if (existingSnap.exists()) return;
+
+    const fallbackName = (user.email ? user.email.split('@')[0] : 'spieler')
+      .toLowerCase()
+      .replace(/[^a-z0-9_.-]/g, '')
+      .slice(0, 32);
+    const username = normalizeUsername(preferredUsername || fallbackName || `spieler_${user.uid.slice(0, 6)}`);
+    const safeUsername = USERNAME_REGEX.test(username)
+      ? username
+      : `u_${user.uid.slice(0, 10).toLowerCase()}`;
+
+    const bootstrapRef = doc(db, 'team_meta', 'bootstrap');
+    let bootstrapSnap;
+    try {
+      bootstrapSnap = await getDoc(bootstrapRef);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.GET, 'team_meta/bootstrap');
+    }
+
+    const isFirstAccount = !bootstrapSnap.exists();
+    const batch = writeBatch(db);
+
+    if (isFirstAccount) {
+      batch.set(bootstrapRef, {
+        coachUid: user.uid,
+        createdAt: serverTimestamp()
+      });
+      batch.set(doc(db, 'coaches', user.uid), {
+        uid: user.uid,
+        username: safeUsername,
+        createdAt: serverTimestamp()
+      });
+      batch.set(userRef, {
+        uid: user.uid,
+        username: safeUsername,
+        displayName: safeUsername.slice(0, 64),
+        role: 'coach',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+    } else {
+      batch.set(userRef, {
+        uid: user.uid,
+        username: safeUsername,
+        displayName: safeUsername.slice(0, 64),
+        role: 'player',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+    }
+
+    try {
+      await batch.commit();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `users/${user.uid}`);
+    }
+
+    if (isFirstAccount) {
+      await seedStarterPlaybook(user.uid);
+    } else {
+      await addPlayerToDefaultTeam(user.uid);
+    }
+  })();
+
+  inFlightProfileEnsures.set(user.uid, run);
   try {
-    deletedSnap = await getDoc(deletedRef);
-  } catch (error) {
-    handleFirestoreError(error, OperationType.GET, `deleted_users/${user.uid}`);
-  }
-
-  if (deletedSnap.exists()) {
-    await firebaseSignOut(auth);
-    throw new AccountDeletedError();
-  }
-
-  const userRef = doc(db, 'users', user.uid);
-  let existingSnap;
-  try {
-    existingSnap = await getDoc(userRef);
-  } catch (error) {
-    handleFirestoreError(error, OperationType.GET, `users/${user.uid}`);
-  }
-
-  if (existingSnap.exists()) return;
-
-  const fallbackName = (user.email ? user.email.split('@')[0] : 'spieler')
-    .toLowerCase()
-    .replace(/[^a-z0-9_.-]/g, '')
-    .slice(0, 32);
-  const username = normalizeUsername(preferredUsername || fallbackName || `spieler_${user.uid.slice(0, 6)}`);
-  const safeUsername = USERNAME_REGEX.test(username)
-    ? username
-    : `u_${user.uid.slice(0, 10).toLowerCase()}`;
-
-  const bootstrapRef = doc(db, 'team_meta', 'bootstrap');
-  let bootstrapSnap;
-  try {
-    bootstrapSnap = await getDoc(bootstrapRef);
-  } catch (error) {
-    handleFirestoreError(error, OperationType.GET, 'team_meta/bootstrap');
-  }
-
-  const isFirstAccount = !bootstrapSnap.exists();
-  const batch = writeBatch(db);
-
-  if (isFirstAccount) {
-    batch.set(bootstrapRef, {
-      coachUid: user.uid,
-      createdAt: serverTimestamp()
-    });
-    batch.set(doc(db, 'coaches', user.uid), {
-      uid: user.uid,
-      username: safeUsername,
-      createdAt: serverTimestamp()
-    });
-    batch.set(userRef, {
-      uid: user.uid,
-      username: safeUsername,
-      displayName: safeUsername.slice(0, 64),
-      role: 'coach',
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp()
-    });
-  } else {
-    batch.set(userRef, {
-      uid: user.uid,
-      username: safeUsername,
-      displayName: safeUsername.slice(0, 64),
-      role: 'player',
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp()
-    });
-  }
-
-  try {
-    await batch.commit();
-  } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, `users/${user.uid}`);
-  }
-
-  // If this user is the initial Coach, seed starter playbook questions & quiz config
-  if (isFirstAccount) {
-    await seedStarterPlaybook(user.uid);
+    await run;
+  } finally {
+    inFlightProfileEnsures.delete(user.uid);
   }
 }
 
@@ -762,6 +813,37 @@ export async function updateTeamInFirestore(
     await updateDoc(doc(db, 'teams', tId), payload);
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function setDefaultTeamInFirestore(
+  teamId: string | null,
+  teams: Team[]
+): Promise<void> {
+  const targetId = teamId ? sanitizeId(teamId) : null;
+  const batch = writeBatch(db);
+
+  for (const team of teams) {
+    const tId = sanitizeId(team.id);
+    if (targetId && tId === targetId) {
+      if (!team.isDefault) {
+        batch.update(doc(db, 'teams', tId), {
+          isDefault: true,
+          updatedAt: serverTimestamp()
+        });
+      }
+    } else if (team.isDefault) {
+      batch.update(doc(db, 'teams', tId), {
+        isDefault: false,
+        updatedAt: serverTimestamp()
+      });
+    }
+  }
+
+  try {
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, targetId ? `teams/${targetId}` : 'teams');
   }
 }
 

@@ -1,6 +1,6 @@
 import React from 'react';
 import { QuizAttempt, Question, Player } from '../types/basketball';
-import { PlayerMedals, getOptionDisplayText } from '../utils/quizEngine';
+import { PlayerMedals, getOptionDisplayText, isPlayerOnline } from '../utils/quizEngine';
 import { PlayerLabel } from './PlayerLabel';
 import { Check, X, RotateCcw, ArrowRight, Trophy } from 'lucide-react';
 
@@ -9,6 +9,7 @@ interface QuizResultsModalProps {
   questions: Question[];
   player: Player;
   medals?: PlayerMedals;
+  nowMs?: number;
   isOpen: boolean;
   onClose: () => void;
   onRetake: () => void;
@@ -20,6 +21,7 @@ export const QuizResultsModal: React.FC<QuizResultsModalProps> = ({
   questions,
   player,
   medals,
+  nowMs = Date.now(),
   isOpen,
   onClose,
   onRetake,
@@ -46,7 +48,11 @@ export const QuizResultsModal: React.FC<QuizResultsModalProps> = ({
           </div>
           <div>
             <p className="text-xs font-medium text-zinc-400 flex items-center justify-center gap-1.5 flex-wrap">
-              <PlayerLabel name={player.name} medals={medals} />
+              <PlayerLabel
+                name={player.name}
+                medals={medals}
+                isOnline={isPlayerOnline(player.lastRoundStartedAt, nowMs)}
+              />
               <span>· {passed ? 'Quiz erfolgreich bestanden! 🎉' : 'Quiz fehlgeschlagen ❌'}</span>
             </p>
             <h2 className="text-3xl font-bold font-mono tabular-nums text-white mt-1">

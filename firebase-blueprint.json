@@ -32,6 +32,10 @@
         "updatedAt": {
           "type": "string",
           "format": "date-time"
+        },
+        "lastRoundStartedAt": {
+          "type": "string",
+          "format": "date-time"
         }
       },
       "required": ["uid", "username", "displayName", "role", "createdAt", "updatedAt"]

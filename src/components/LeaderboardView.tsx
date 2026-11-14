@@ -1,8 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { Player, QuizAttempt, Team } from '../types/basketball';
-import { calculateWeeklyLeaderboard, calculateAllTimeLeaderboard, getWeekKey, PlayerMedals } from '../utils/quizEngine';
+import {
+  calculateWeeklyLeaderboard,
+  calculateAllTimeLeaderboard,
+  getWeekKey,
+  isPlayerOnline,
+  PlayerMedals
+} from '../utils/quizEngine';
 import { PlayerLabel } from './PlayerLabel';
-import { Flame } from 'lucide-react';
+import { Flame, Trophy } from 'lucide-react';
 
 interface LeaderboardViewProps {
   players: Player[];
@@ -11,6 +17,7 @@ interface LeaderboardViewProps {
   activeTeam?: Team | null;
   teams?: Team[];
   medalsByPlayer?: Map<string, PlayerMedals>;
+  nowMs?: number;
   onSelectPlayerDetail?: (player: Player) => void;
   viewerIsCoach?: boolean;
   embedded?: boolean;
@@ -23,6 +30,7 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
   activeTeam = null,
   teams = [],
   medalsByPlayer,
+  nowMs = Date.now(),
   onSelectPlayerDetail,
   viewerIsCoach = false,
   embedded = false
@@ -209,7 +217,11 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
 
                   <div className="min-w-0">
                     <div className="text-sm font-semibold text-white flex items-center gap-1.5 min-w-0">
-                      <PlayerLabel name={item.player.name} medals={medals} />
+                      <PlayerLabel
+                        name={item.player.name}
+                        medals={medals}
+                        isOnline={isPlayerOnline(item.player.lastRoundStartedAt, nowMs)}
+                      />
                       {item.player.role === 'coach' && (
                         <span className="text-red-400 font-medium text-[11px] shrink-0">Trainer</span>
                       )}
@@ -222,7 +234,7 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
                   </div>
                 </div>
 
-                <div className="flex items-center gap-4 shrink-0 text-right">
+                <div className="flex items-center gap-3 sm:gap-4 shrink-0 text-right">
                   <div>
                     <div
                       className={`text-sm font-bold font-mono tabular-nums inline-flex items-center justify-end gap-1 ${
@@ -243,6 +255,27 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
                       Serie
                     </div>
                   </div>
+
+                  {boardType === 'alltime' && (
+                    <div>
+                      <div
+                        className={`text-sm font-bold font-mono tabular-nums inline-flex items-center justify-end gap-1 ${
+                          item.bestStreak > 0 ? 'text-amber-300' : 'text-zinc-500'
+                        }`}
+                        title={`Maximale Serie: ${item.bestStreak} ${item.bestStreak === 1 ? 'Durchgang' : 'Durchgänge'} in Folge ohne Fehler`}
+                      >
+                        <Trophy
+                          className={`w-3.5 h-3.5 ${
+                            item.bestStreak > 0 ? 'text-amber-400' : 'text-zinc-600'
+                          }`}
+                        />
+                        <span>{item.bestStreak}</span>
+                      </div>
+                      <div className="text-[11px] text-zinc-400">
+                        Max. Serie
+                      </div>
+                    </div>
+                  )}
 
                   <div className="min-w-[54px]">
                     <div className="text-sm font-bold font-mono tabular-nums text-white">

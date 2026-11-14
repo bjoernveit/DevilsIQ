@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { collection, doc, onSnapshot, query, where } from 'firebase/firestore';
+import { Timestamp, collection, doc, onSnapshot, query, where } from 'firebase/firestore';
 import { Player, Question, QuizAttempt, QuizConfig, Team } from './types/basketball';
 import { ALL_TAGS } from './data/initialData';
 import {
@@ -8,7 +8,8 @@ import {
   generateQuizSession,
   getTeamQuizConfig,
   calculatePlayerMedals,
-  getWeekKey
+  getWeekKey,
+  isPlayerOnline
 } from './utils/quizEngine';
 import {
   auth,
@@ -33,6 +34,7 @@ import {
   setDefaultTeamInFirestore,
   deleteTeamFromFirestore,
   migrateAllAttemptsToTeam,
+  markRoundStartedInFirestore,
   toIsoString
 } from './lib/firebase';
 import { AuthScreen } from './components/AuthScreen';
@@ -92,6 +94,7 @@ export default function App() {
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isMigratingAttempts, setIsMigratingAttempts] = useState(false);
   const [migrationMessage, setMigrationMessage] = useState<string | null>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   // Listen to Firebase Auth state
   useEffect(() => {
@@ -141,13 +144,21 @@ export default function App() {
       usersQuery,
       snapshot => {
         const list: Player[] = snapshot.docs.map(docSnap => {
-          const data = docSnap.data();
+          const data = docSnap.data({ serverTimestamps: 'estimate' });
+          const rawLastRound = data.lastRoundStartedAt;
+          const lastRoundStartedAt =
+            rawLastRound instanceof Timestamp
+              ? rawLastRound.toDate().toISOString()
+              : typeof rawLastRound === 'string' && rawLastRound.trim().length > 0
+              ? rawLastRound
+              : undefined;
           return {
             id: docSnap.id,
             name: String(data.displayName || data.username || 'Spieler'),
             username: data.username ? String(data.username) : undefined,
             avatarColor: '#171717',
-            role: data.role === 'coach' ? 'coach' : 'player'
+            role: data.role === 'coach' ? 'coach' : 'player',
+            ...(lastRoundStartedAt ? { lastRoundStartedAt } : {})
           };
         });
         setPlayers(list);
@@ -156,6 +167,11 @@ export default function App() {
         handleFirestoreError(error, OperationType.LIST, 'users');
       }
     );
+
+    setNowMs(Date.now());
+    const onlineTicker = setInterval(() => {
+      setNowMs(Date.now());
+    }, 10_000);
 
     const questionsQuery = query(
       collection(db, 'questions'),
@@ -302,6 +318,7 @@ export default function App() {
     );
 
     return () => {
+      clearInterval(onlineTicker);
       unsubUsers();
       unsubQuestions();
       unsubAttempts();
@@ -397,6 +414,8 @@ export default function App() {
     setActiveQuizTeamId(activePlayerTeam.id);
     setActiveQuizTimeSeconds(effectivePlayerConfig.timePerQuestionSeconds);
     setIsQuizActive(true);
+    setNowMs(Date.now());
+    void markRoundStartedInFirestore(firebaseUser.uid).catch(() => {});
   };
 
   const handleFinishQuiz = async (attempt: QuizAttempt) => {
@@ -562,6 +581,7 @@ export default function App() {
           <PlayerLabel
             name={currentPlayer.name}
             medals={medalsByPlayer.get(currentPlayer.id)}
+            isOnline={isPlayerOnline(currentPlayer.lastRoundStartedAt, nowMs)}
           />
         </button>
       </header>
@@ -589,6 +609,7 @@ export default function App() {
             questionCount={effectivePlayerQuestions.length}
             isCoach={isCoach}
             medalsByPlayer={medalsByPlayer}
+            nowMs={nowMs}
             onStartQuiz={handleStartQuiz}
             onOpenConfig={() => openConfigModalForTeam(activePlayerTeam)}
             onSelectPlayerDetail={handleSelectPlayerDetail}
@@ -729,6 +750,7 @@ export default function App() {
                 attempts={attempts}
                 teams={teams}
                 medalsByPlayer={medalsByPlayer}
+                nowMs={nowMs}
                 selectedTeamId={coachAnalyticsTeamFilter}
                 onSelectTeamId={setCoachAnalyticsTeamFilter}
                 onOpenTeamConfig={team => openConfigModalForTeam(team)}
@@ -741,6 +763,7 @@ export default function App() {
                 players={players}
                 questions={questions}
                 medalsByPlayer={medalsByPlayer}
+                nowMs={nowMs}
                 selectedTeamId={coachSelectedTeamId}
                 onSelectTeamId={setCoachSelectedTeamId}
                 onCreateTeam={name => createTeamInFirestore(name, firebaseUser.uid, quizConfig)}
@@ -844,6 +867,7 @@ export default function App() {
         attempts={attempts}
         questions={questions}
         medals={selectedPlayerForDetail ? medalsByPlayer.get(selectedPlayerForDetail.id) : undefined}
+        nowMs={nowMs}
         isOpen={isPlayerDetailOpen}
         onClose={() => {
           setIsPlayerDetailOpen(false);
@@ -867,6 +891,7 @@ export default function App() {
         questions={questions}
         player={currentPlayer}
         medals={medalsByPlayer.get(currentPlayer.id)}
+        nowMs={nowMs}
         isOpen={isResultsOpen}
         onClose={() => setIsResultsOpen(false)}
         onRetake={() => {

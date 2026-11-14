@@ -6,6 +6,7 @@ import {
   calculateWeeklyTrends,
   filterQuestionsForTeam,
   getWeekKey,
+  isPlayerOnline,
   PlayerMedals
 } from '../utils/quizEngine';
 import { getRegistrationUrl } from '../lib/firebase';
@@ -27,6 +28,7 @@ interface CoachAnalyticsViewProps {
   attempts: QuizAttempt[];
   teams: Team[];
   medalsByPlayer?: Map<string, PlayerMedals>;
+  nowMs?: number;
   selectedTeamId: string;
   onSelectTeamId: (teamId: string) => void;
   onOpenTeamConfig?: (team: Team) => void;
@@ -40,6 +42,7 @@ export const CoachAnalyticsView: React.FC<CoachAnalyticsViewProps> = ({
   attempts,
   teams,
   medalsByPlayer,
+  nowMs = Date.now(),
   selectedTeamId,
   onSelectTeamId,
   onOpenTeamConfig,
@@ -335,6 +338,7 @@ export const CoachAnalyticsView: React.FC<CoachAnalyticsViewProps> = ({
                       <PlayerLabel
                         name={summary.player.name}
                         medals={medalsByPlayer?.get(summary.player.id)}
+                        isOnline={isPlayerOnline(summary.player.lastRoundStartedAt, nowMs)}
                       />
                       {summary.player.role === 'coach' && (
                         <span className="text-red-400 font-medium text-[11px]">Trainer</span>

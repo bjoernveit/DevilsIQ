@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Player, Question, Team } from '../types/basketball';
-import { filterQuestionsForTeam, PlayerMedals } from '../utils/quizEngine';
+import { filterQuestionsForTeam, isPlayerOnline, PlayerMedals } from '../utils/quizEngine';
 import { PlayerLabel } from './PlayerLabel';
 import {
   Plus,
@@ -18,6 +18,7 @@ interface CoachTeamsViewProps {
   players: Player[];
   questions: Question[];
   medalsByPlayer?: Map<string, PlayerMedals>;
+  nowMs?: number;
   selectedTeamId: string | null;
   onSelectTeamId: (teamId: string | null) => void;
   onCreateTeam: (name: string) => Promise<string>;
@@ -36,6 +37,7 @@ export const CoachTeamsView: React.FC<CoachTeamsViewProps> = ({
   players,
   questions,
   medalsByPlayer,
+  nowMs = Date.now(),
   selectedTeamId,
   onSelectTeamId,
   onCreateTeam,
@@ -483,6 +485,7 @@ export const CoachTeamsView: React.FC<CoachTeamsViewProps> = ({
                                 <PlayerLabel
                                   name={member.name}
                                   medals={medalsByPlayer?.get(member.id)}
+                                  isOnline={isPlayerOnline(member.lastRoundStartedAt, nowMs)}
                                 />
                                 {member.role === 'coach' && (
                                   <span className="text-red-400 font-medium text-[11px] shrink-0">

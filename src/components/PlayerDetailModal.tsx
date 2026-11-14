@@ -8,6 +8,7 @@ import {
   calculateBestErrorFreeStreak,
   calculateQuestionStats,
   getOptionDisplayText,
+  isPlayerOnline,
   PlayerMedals
 } from '../utils/quizEngine';
 import { PlayerLabel } from './PlayerLabel';
@@ -18,6 +19,7 @@ interface PlayerDetailModalProps {
   attempts: QuizAttempt[];
   questions: Question[];
   medals?: PlayerMedals;
+  nowMs?: number;
   isOpen: boolean;
   onClose: () => void;
   viewerIsCoach?: boolean;
@@ -33,6 +35,7 @@ export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
   attempts,
   questions,
   medals,
+  nowMs = Date.now(),
   isOpen,
   onClose,
   viewerIsCoach,
@@ -189,7 +192,11 @@ export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
         <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-800 gap-3">
           <div className="min-w-0">
             <h2 className="text-base font-bold text-white truncate">
-              <PlayerLabel name={player.name} medals={medals} />
+              <PlayerLabel
+                name={player.name}
+                medals={medals}
+                isOnline={isPlayerOnline(player.lastRoundStartedAt, nowMs)}
+              />
             </h2>
             <p className="text-xs text-zinc-400">
               {isTargetCoach ? 'Trainer · ' : ''}

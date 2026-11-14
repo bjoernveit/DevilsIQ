@@ -1,6 +1,6 @@
 import React from 'react';
 import { Player, QuizAttempt, QuizConfig, Team } from '../types/basketball';
-import { calculateWeeklyLeaderboard, getWeekKey, PlayerMedals } from '../utils/quizEngine';
+import { calculateWeeklyLeaderboard, getWeekKey, isPlayerOnline, PlayerMedals } from '../utils/quizEngine';
 import { LeaderboardView } from './LeaderboardView';
 import { PlayerLabel } from './PlayerLabel';
 import { Play, SlidersHorizontal, Check, Clock } from 'lucide-react';
@@ -17,6 +17,7 @@ interface PlayerHomeViewProps {
   questionCount: number;
   isCoach: boolean;
   medalsByPlayer?: Map<string, PlayerMedals>;
+  nowMs?: number;
   onStartQuiz: () => void;
   onOpenConfig: () => void;
   onSelectPlayerDetail?: (player: Player) => void;
@@ -36,6 +37,7 @@ export const PlayerHomeView: React.FC<PlayerHomeViewProps> = ({
   questionCount,
   isCoach,
   medalsByPlayer,
+  nowMs = Date.now(),
   onStartQuiz,
   onOpenConfig,
   onSelectPlayerDetail,
@@ -68,6 +70,7 @@ export const PlayerHomeView: React.FC<PlayerHomeViewProps> = ({
             <PlayerLabel
               name={player.name}
               medals={medalsByPlayer?.get(player.id)}
+              isOnline={isPlayerOnline(player.lastRoundStartedAt, nowMs)}
               medalClassName="w-4 h-4"
             />
           </h1>
@@ -205,6 +208,7 @@ export const PlayerHomeView: React.FC<PlayerHomeViewProps> = ({
           activeTeam={activeTeam}
           teams={teams}
           medalsByPlayer={medalsByPlayer}
+          nowMs={nowMs}
           onSelectPlayerDetail={onSelectPlayerDetail}
           viewerIsCoach={isCoach}
           embedded

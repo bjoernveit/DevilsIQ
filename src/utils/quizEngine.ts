@@ -256,9 +256,26 @@ export interface PlayerWeeklySummary {
   averageTimeThisWeek: number;
   averageAccuracyThisWeek: number;
   currentStreak: number;
+  bestStreak: number;
   lastAttemptDate?: string;
   totalPointsThisWeek: number;
   seasonTotalScore: number;
+}
+
+export const ONLINE_WINDOW_MS = 60_000;
+
+/**
+ * Returns true if the player started a quiz round within the last minute.
+ */
+export function isPlayerOnline(
+  lastRoundStartedAt?: string | null,
+  nowMs: number = Date.now()
+): boolean {
+  if (!lastRoundStartedAt) return false;
+  const startedMs = new Date(lastRoundStartedAt).getTime();
+  if (!Number.isFinite(startedMs)) return false;
+  const diff = nowMs - startedMs;
+  return diff <= ONLINE_WINDOW_MS && diff >= -10_000;
 }
 
 /**
@@ -431,6 +448,7 @@ export function calculateWeeklyLeaderboard(
       : 0;
 
     const currentStreak = calculateCurrentErrorFreeStreak(playerAttempts);
+    const bestStreak = calculateBestErrorFreeStreak(playerAttempts);
     const seasonTotalScore = playerAttempts.reduce((acc, a) => acc + a.totalScore, 0);
 
     // Get latest attempt timestamp
@@ -448,6 +466,7 @@ export function calculateWeeklyLeaderboard(
       averageTimeThisWeek,
       averageAccuracyThisWeek,
       currentStreak,
+      bestStreak,
       lastAttemptDate,
       totalPointsThisWeek,
       seasonTotalScore
@@ -510,6 +529,7 @@ export function calculateAllTimeLeaderboard(
       : 0;
 
     const currentStreak = calculateCurrentErrorFreeStreak(playerAttempts);
+    const bestStreak = calculateBestErrorFreeStreak(playerAttempts);
     const seasonTotalScore = playerAttempts.reduce((acc, a) => acc + a.totalScore, 0);
 
     const sortedAttempts = [...playerAttempts].sort(
@@ -526,6 +546,7 @@ export function calculateAllTimeLeaderboard(
       averageTimeThisWeek,
       averageAccuracyThisWeek,
       currentStreak,
+      bestStreak,
       lastAttemptDate,
       totalPointsThisWeek,
       seasonTotalScore

@@ -14,7 +14,9 @@ import {
   calculateBestErrorFreeStreak,
   calculatePlayerMedals,
   calculateQuestionStats,
-  getOptionDisplayText
+  getOptionDisplayText,
+  ONLINE_WINDOW_MS,
+  isPlayerOnline
 } from './quizEngine';
 import { Question, QuizConfig, QuizAttempt, Player, Team } from '../types/basketball';
 
@@ -354,6 +356,7 @@ test('calculateAllTimeLeaderboard aggregates all attempts across weeks', () => {
   assert.equal(leaderboard[0].player.id, 'p1');
   assert.equal(leaderboard[0].bestScoreThisWeek, 30);
   assert.equal(leaderboard[0].currentStreak, 2);
+  assert.equal(leaderboard[0].bestStreak, 2);
 });
 
 test('calculateCurrentErrorFreeStreak counts trailing passed attempts accurately', () => {
@@ -705,6 +708,57 @@ test('calculateQuestionStats computes average time per question to 1 decimal pla
   // (7.3 + 4.1) / 2 = 5.7s
   assert.equal(q2.averageTimeSeconds, 5.7);
   assert.equal(q2.lastIsCorrect, true);
+});
+
+test('calculateAllTimeLeaderboard tracks bestStreak even after a later failed run resets currentStreak', () => {
+  const players: Player[] = [
+    { id: 'p1', name: 'Marcus Smart', avatarColor: '#10b981' }
+  ];
+  const mkAttempt = (id: string, ts: string, passed: boolean): QuizAttempt => ({
+    id,
+    playerId: 'p1',
+    timestamp: ts,
+    weekKey: '2026-W45',
+    totalScore: 20,
+    correctCount: passed ? 5 : 2,
+    totalQuestions: 5,
+    totalTimeSeconds: 20,
+    maxStreak: passed ? 5 : 2,
+    answers: [],
+    passed
+  });
+
+  const attempts: QuizAttempt[] = [
+    mkAttempt('a1', '2026-11-01T10:00:00Z', true),
+    mkAttempt('a2', '2026-11-02T10:00:00Z', true),
+    mkAttempt('a3', '2026-11-03T10:00:00Z', true),
+    mkAttempt('a4', '2026-11-04T10:00:00Z', false),
+    mkAttempt('a5', '2026-11-05T10:00:00Z', true)
+  ];
+
+  const leaderboard = calculateAllTimeLeaderboard(players, attempts);
+  assert.equal(leaderboard[0].currentStreak, 1);
+  assert.equal(leaderboard[0].bestStreak, 3);
+});
+
+test('isPlayerOnline returns true only when a round was started within the last minute', () => {
+  const nowMs = new Date('2026-11-10T12:00:00.000Z').getTime();
+
+  assert.equal(isPlayerOnline(undefined, nowMs), false);
+  assert.equal(isPlayerOnline(null, nowMs), false);
+  assert.equal(isPlayerOnline('invalid-date', nowMs), false);
+
+  // Started 0ms ago, 30s ago, and exactly 60s ago -> online
+  assert.equal(isPlayerOnline(new Date(nowMs).toISOString(), nowMs), true);
+  assert.equal(isPlayerOnline(new Date(nowMs - 30_000).toISOString(), nowMs), true);
+  assert.equal(isPlayerOnline(new Date(nowMs - ONLINE_WINDOW_MS).toISOString(), nowMs), true);
+
+  // Slight client/server clock skew ahead by 5s -> online
+  assert.equal(isPlayerOnline(new Date(nowMs + 5_000).toISOString(), nowMs), true);
+
+  // Started 60.001s ago or 5m ago -> offline
+  assert.equal(isPlayerOnline(new Date(nowMs - ONLINE_WINDOW_MS - 1).toISOString(), nowMs), false);
+  assert.equal(isPlayerOnline(new Date(nowMs - 300_000).toISOString(), nowMs), false);
 });
 
 

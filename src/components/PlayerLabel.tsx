@@ -5,6 +5,7 @@ import { PlayerMedals } from '../utils/quizEngine';
 interface PlayerLabelProps {
   name: string;
   medals?: PlayerMedals;
+  isOnline?: boolean;
   className?: string;
   medalClassName?: string;
 }
@@ -12,6 +13,7 @@ interface PlayerLabelProps {
 export const PlayerLabel: React.FC<PlayerLabelProps> = ({
   name,
   medals,
+  isOnline = false,
   className = '',
   medalClassName = 'w-3.5 h-3.5'
 }) => {
@@ -22,6 +24,13 @@ export const PlayerLabel: React.FC<PlayerLabelProps> = ({
 
   return (
     <span className={`inline-flex items-center gap-1.5 min-w-0 ${className}`}>
+      {isOnline && (
+        <span
+          className="w-2 h-2 rounded-full bg-emerald-400 shrink-0 shadow-[0_0_6px_rgba(52,211,153,0.75)]"
+          title="Online (Runde in der letzten Minute gestartet)"
+          aria-label="Online"
+        />
+      )}
       <span className="truncate">{name}</span>
       {hasMedals && (
         <span className="inline-flex items-center gap-1.5 shrink-0 font-mono text-[11px] font-bold">

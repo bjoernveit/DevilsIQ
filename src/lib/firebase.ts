@@ -405,6 +405,18 @@ export async function updateUserProfileInFirestore(
   }
 }
 
+export async function markRoundStartedInFirestore(uid: string): Promise<void> {
+  const path = `users/${uid}`;
+  try {
+    await updateDoc(doc(db, 'users', uid), {
+      lastRoundStartedAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
 export async function setUserRoleInFirestore(
   targetPlayer: Player,
   nextRole: UserRole

@@ -7,6 +7,7 @@ export interface Player {
   avatarColor: string;
   isCaptain?: boolean;
   role?: UserRole;
+  lastRoundStartedAt?: string;
 }
 
 export type CourtEntityRole = '1' | '2' | '3' | '4' | '5' | 'x1' | 'x2' | 'x3' | 'x4' | 'x5' | 'ball';

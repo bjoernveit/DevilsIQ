@@ -635,6 +635,41 @@ export async function saveAttemptToFirestore(attempt: QuizAttempt): Promise<void
   }
 }
 
+export async function migrateAllAttemptsToTeam(targetTeamId: string): Promise<number> {
+  const cleanTeamId = sanitizeId(targetTeamId);
+  if (!cleanTeamId) {
+    throw new Error('Ungültige Team-ID.');
+  }
+
+  let docsToUpdate: string[] = [];
+  try {
+    const attemptsQuery = query(collection(db, 'attempts'), where('totalQuestions', '>', 0));
+    const snapshot = await getDocs(attemptsQuery);
+    docsToUpdate = snapshot.docs
+      .filter(d => d.data().teamId !== cleanTeamId)
+      .map(d => d.id);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, 'attempts');
+  }
+
+  for (let i = 0; i < docsToUpdate.length; i += 400) {
+    const chunk = docsToUpdate.slice(i, i + 400);
+    const batch = writeBatch(db);
+    for (const attemptId of chunk) {
+      batch.update(doc(db, 'attempts', attemptId), {
+        teamId: cleanTeamId
+      });
+    }
+    try {
+      await batch.commit();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'attempts');
+    }
+  }
+
+  return docsToUpdate.length;
+}
+
 export async function saveQuizConfigToFirestore(config: QuizConfig): Promise<void> {
   const path = 'team_meta/quiz_config';
   const payload: Record<string, unknown> = {

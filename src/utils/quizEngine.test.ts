@@ -13,6 +13,7 @@ import {
   calculateCurrentErrorFreeStreak,
   calculateBestErrorFreeStreak,
   calculatePlayerMedals,
+  calculateQuestionStats,
   getOptionDisplayText
 } from './quizEngine';
 import { Question, QuizConfig, QuizAttempt, Player, Team } from '../types/basketball';
@@ -647,6 +648,63 @@ test('calculatePlayerMedals awards Gold, Silver, and Bronze for completed weeks 
   assert.equal(w44Board[0].bestScoreThisWeek, 14.2);
   assert.equal(w44Board[1].player.id, 'p1');
   assert.equal(w44Board[1].bestScoreThisWeek, 19.8);
+});
+
+test('calculateQuestionStats computes average time per question to 1 decimal place and latest answer status', () => {
+  const attempts: QuizAttempt[] = [
+    {
+      id: 'att1',
+      playerId: 'p1',
+      timestamp: '2026-11-01T10:00:00Z',
+      weekKey: '2026-W44',
+      totalScore: 10.5,
+      correctCount: 1,
+      totalQuestions: 2,
+      totalTimeSeconds: 10.5,
+      maxStreak: 1,
+      answers: [
+        { questionId: 'q1', selectedOptionId: 'opt1', isCorrect: true, timeSpentSeconds: 3.2, pointsEarned: 100 },
+        { questionId: 'q2', selectedOptionId: 'opt4', isCorrect: false, timeSpentSeconds: 7.3, pointsEarned: 0 }
+      ],
+      passed: false
+    },
+    {
+      id: 'att2',
+      playerId: 'p2',
+      timestamp: '2026-11-02T10:00:00Z',
+      weekKey: '2026-W45',
+      totalScore: 8.6,
+      correctCount: 2,
+      totalQuestions: 2,
+      totalTimeSeconds: 8.6,
+      maxStreak: 2,
+      answers: [
+        { questionId: 'q1', selectedOptionId: 'opt1', isCorrect: true, timeSpentSeconds: 4.5, pointsEarned: 100 },
+        { questionId: 'q2', selectedOptionId: 'opt3', isCorrect: true, timeSpentSeconds: 4.1, pointsEarned: 100 }
+      ],
+      passed: true
+    }
+  ];
+
+  const stats = calculateQuestionStats(attempts);
+  const q1 = stats.get('q1');
+  assert.ok(q1);
+  assert.equal(q1.total, 2);
+  assert.equal(q1.correct, 2);
+  assert.equal(q1.accuracy, 100);
+  // (3.2 + 4.5) / 2 = 3.85 -> 3.9s
+  assert.equal(q1.averageTimeSeconds, 3.9);
+  assert.equal(q1.lastIsCorrect, true);
+
+  const q2 = stats.get('q2');
+  assert.ok(q2);
+  assert.equal(q2.total, 2);
+  assert.equal(q2.correct, 1);
+  assert.equal(q2.wrong, 1);
+  assert.equal(q2.accuracy, 50);
+  // (7.3 + 4.1) / 2 = 5.7s
+  assert.equal(q2.averageTimeSeconds, 5.7);
+  assert.equal(q2.lastIsCorrect, true);
 });
 
 

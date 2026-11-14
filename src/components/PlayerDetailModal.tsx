@@ -6,11 +6,12 @@ import {
   getWeekKey,
   calculateCurrentErrorFreeStreak,
   calculateBestErrorFreeStreak,
+  calculateQuestionStats,
   getOptionDisplayText,
   PlayerMedals
 } from '../utils/quizEngine';
 import { PlayerLabel } from './PlayerLabel';
-import { X, Trash2, Star, ExternalLink, ChevronDown, ChevronUp, AlertCircle, CheckCircle2, Flame } from 'lucide-react';
+import { X, Trash2, Star, ExternalLink, ChevronDown, ChevronUp, AlertCircle, CheckCircle2, Flame, Clock } from 'lucide-react';
 
 interface PlayerDetailModalProps {
   player: Player | null;
@@ -43,6 +44,7 @@ export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'overview' | 'questions'>('overview');
   const [questionSubFilter, setQuestionSubFilter] = useState<'all' | 'struggling' | 'solid'>('all');
+  const [questionSort, setQuestionSort] = useState<'lowest_accuracy' | 'slowest' | 'fastest'>('lowest_accuracy');
   const [expandedQuestionId, setExpandedQuestionId] = useState<string | null>(null);
 
   const [isUpdatingRole, setIsUpdatingRole] = useState(false);
@@ -53,6 +55,7 @@ export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
   React.useEffect(() => {
     setActiveTab('overview');
     setQuestionSubFilter('all');
+    setQuestionSort('lowest_accuracy');
     setExpandedQuestionId(null);
     setConfirmDelete(false);
     setIsDeleting(false);
@@ -92,42 +95,24 @@ export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
     return calculateWeeklyTrends(attempts, player.id);
   }, [attempts, player?.id]);
 
+  const overallAvgQuestionTime = useMemo(() => {
+    let sum = 0;
+    let count = 0;
+    for (const att of playerAttempts) {
+      for (const ans of att.answers) {
+        if (typeof ans.timeSpentSeconds === 'number' && ans.timeSpentSeconds > 0) {
+          sum += ans.timeSpentSeconds;
+          count += 1;
+        }
+      }
+    }
+    return count > 0 ? Math.round((sum / count) * 10) / 10 : 0;
+  }, [playerAttempts]);
+
   // Compute question-by-question performance specifically for this player
   const playerQuestionStats = useMemo(() => {
     if (!player) return [];
-    const statsMap = new Map<
-      string,
-      {
-        questionId: string;
-        total: number;
-        correct: number;
-        wrong: number;
-        lastIsCorrect: boolean;
-        lastAttemptTimestamp: string;
-      }
-    >();
-
-    // Process attempts in chronological order (oldest to newest) to determine last answer status
-    const chronologicalAttempts = [...playerAttempts].reverse();
-    for (const att of chronologicalAttempts) {
-      for (const ans of att.answers) {
-        const cur = statsMap.get(ans.questionId) || {
-          questionId: ans.questionId,
-          total: 0,
-          correct: 0,
-          wrong: 0,
-          lastIsCorrect: ans.isCorrect,
-          lastAttemptTimestamp: att.timestamp
-        };
-        cur.total += 1;
-        if (ans.isCorrect) cur.correct += 1;
-        else cur.wrong += 1;
-        cur.lastIsCorrect = ans.isCorrect;
-        cur.lastAttemptTimestamp = att.timestamp;
-        statsMap.set(ans.questionId, cur);
-      }
-    }
-
+    const statsMap = calculateQuestionStats(playerAttempts);
     const questionMap = new Map<string, Question>(questions.map(q => [q.id, q]));
 
     const list: Array<{
@@ -136,6 +121,8 @@ export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
       correct: number;
       wrong: number;
       accuracy: number;
+      averageTimeSeconds: number;
+      timedCount: number;
       lastIsCorrect: boolean;
       lastAttemptTimestamp: string;
       isStruggling: boolean;
@@ -144,27 +131,39 @@ export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
     statsMap.forEach((stat, qId) => {
       const q = questionMap.get(qId);
       if (!q) return;
-      const accuracy = stat.total > 0 ? Math.round((stat.correct / stat.total) * 100) : 0;
-      // Considered struggling if accuracy < 75% or has at least 1 wrong answer
-      const isStruggling = accuracy < 90;
+      const isStruggling = stat.accuracy < 90;
       list.push({
         question: q,
         total: stat.total,
         correct: stat.correct,
         wrong: stat.wrong,
-        accuracy,
+        accuracy: stat.accuracy,
+        averageTimeSeconds: stat.averageTimeSeconds,
+        timedCount: stat.timedCount,
         lastIsCorrect: stat.lastIsCorrect,
         lastAttemptTimestamp: stat.lastAttemptTimestamp,
         isStruggling
       });
     });
 
-    // Sort: problem questions first (lowest accuracy first, then highest wrong count)
     return list.sort((a, b) => {
+      if (questionSort === 'slowest') {
+        if (a.timedCount > 0 && b.timedCount === 0) return -1;
+        if (a.timedCount === 0 && b.timedCount > 0) return 1;
+        if (b.averageTimeSeconds !== a.averageTimeSeconds) {
+          return b.averageTimeSeconds - a.averageTimeSeconds;
+        }
+      } else if (questionSort === 'fastest') {
+        if (a.timedCount > 0 && b.timedCount === 0) return -1;
+        if (a.timedCount === 0 && b.timedCount > 0) return 1;
+        if (a.averageTimeSeconds !== b.averageTimeSeconds) {
+          return a.averageTimeSeconds - b.averageTimeSeconds;
+        }
+      }
       if (a.accuracy !== b.accuracy) return a.accuracy - b.accuracy;
       return b.wrong - a.wrong;
     });
-  }, [playerAttempts, questions, player?.id]);
+  }, [playerAttempts, questions, player?.id, questionSort]);
 
   const canView = viewerIsCoach || (Boolean(currentUserId) && player?.id === currentUserId);
   if (!isOpen || !player || !canView) return null;
@@ -279,6 +278,11 @@ export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
                   <div className="text-base font-bold font-mono tabular-nums text-white mt-0.5">
                     {passedAttempts.length} / {playerAttempts.length}
                   </div>
+                  {overallAvgQuestionTime > 0 && (
+                    <div className="text-[10px] text-zinc-500 font-mono tabular-nums">
+                      Ø {overallAvgQuestionTime.toFixed(1)}s / Frage
+                    </div>
+                  )}
                 </div>
                 <div className="p-3 bg-zinc-950 rounded-xl border border-zinc-800">
                   <div className="text-[11px] text-zinc-400">
@@ -432,44 +436,57 @@ export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
                 )}
               </div>
 
-              {/* Sub-Filters */}
-              <div className="inline-flex items-center gap-1 p-1 bg-zinc-950 border border-zinc-800 rounded-xl">
-                <button
-                  type="button"
-                  onClick={() => setQuestionSubFilter('all')}
-                  className={`px-3 py-1 text-xs font-medium rounded-lg transition-colors ${
-                    questionSubFilter === 'all'
-                      ? 'bg-red-700 text-white'
-                      : 'text-zinc-400 hover:text-zinc-200'
-                  }`}
+              {/* Sub-Filters & Sort */}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="inline-flex items-center gap-1 p-1 bg-zinc-950 border border-zinc-800 rounded-xl">
+                  <button
+                    type="button"
+                    onClick={() => setQuestionSubFilter('all')}
+                    className={`px-3 py-1 text-xs font-medium rounded-lg transition-colors ${
+                      questionSubFilter === 'all'
+                        ? 'bg-red-700 text-white'
+                        : 'text-zinc-400 hover:text-zinc-200'
+                    }`}
+                  >
+                    Alle ({playerQuestionStats.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setQuestionSubFilter('struggling')}
+                    className={`px-3 py-1 text-xs font-medium rounded-lg transition-colors flex items-center gap-1 ${
+                      questionSubFilter === 'struggling'
+                        ? 'bg-red-700 text-white'
+                        : 'text-zinc-400 hover:text-zinc-200'
+                    }`}
+                  >
+                    <span>Unsicher</span>
+                    <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-red-950/80 text-red-300 font-mono font-bold">
+                      {strugglingCount}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setQuestionSubFilter('solid')}
+                    className={`px-3 py-1 text-xs font-medium rounded-lg transition-colors ${
+                      questionSubFilter === 'solid'
+                        ? 'bg-red-700 text-white'
+                        : 'text-zinc-400 hover:text-zinc-200'
+                    }`}
+                  >
+                    Sicher ({solidCount})
+                  </button>
+                </div>
+
+                <select
+                  value={questionSort}
+                  onChange={e => setQuestionSort(e.target.value as 'lowest_accuracy' | 'slowest' | 'fastest')}
+                  aria-label="Fragen sortieren"
+                  className="bg-zinc-950 border border-zinc-800 rounded-xl px-2.5 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-red-600 min-h-[32px]"
                 >
-                  Alle ({playerQuestionStats.length})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setQuestionSubFilter('struggling')}
-                  className={`px-3 py-1 text-xs font-medium rounded-lg transition-colors flex items-center gap-1 ${
-                    questionSubFilter === 'struggling'
-                      ? 'bg-red-700 text-white'
-                      : 'text-zinc-400 hover:text-zinc-200'
-                  }`}
-                >
-                  <span>Unsicher</span>
-                  <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-red-950/80 text-red-300 font-mono font-bold">
-                    {strugglingCount}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setQuestionSubFilter('solid')}
-                  className={`px-3 py-1 text-xs font-medium rounded-lg transition-colors ${
-                    questionSubFilter === 'solid'
-                      ? 'bg-red-700 text-white'
-                      : 'text-zinc-400 hover:text-zinc-200'
-                  }`}
-                >
-                  Sicher ({solidCount})
-                </button>
+                  <option value="lowest_accuracy">Niedrigste Quote</option>
+                  <option value="slowest">Längste Ø Zeit</option>
+                  <option value="fastest">Kürzeste Ø Zeit</option>
+                </select>
               </div>
 
               {/* Question Items List */}
@@ -514,6 +531,16 @@ export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
                               >
                                 {stat.accuracy}% Quote ({stat.correct}/{stat.total})
                               </span>
+
+                              {stat.averageTimeSeconds > 0 && (
+                                <span
+                                  className="inline-flex items-center gap-1 font-mono font-medium px-2 py-0.5 rounded-md text-[11px] bg-zinc-900 border border-zinc-800 text-zinc-300 tabular-nums"
+                                  title={`Durchschnittliche Antwortzeit über ${stat.timedCount} ${stat.timedCount === 1 ? 'Antwort' : 'Antworten'}`}
+                                >
+                                  <Clock className="w-3 h-3 text-zinc-400" />
+                                  Ø {stat.averageTimeSeconds.toFixed(1)}s
+                                </span>
+                              )}
 
                               {stat.wrong > 0 && (
                                 <span className="text-[11px] text-red-400 font-mono">

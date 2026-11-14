@@ -600,3 +600,67 @@ export function formatSeconds(seconds: number | undefined | null): string {
   return `${seconds.toFixed(1)}s`;
 }
 
+export interface QuestionPerformanceStat {
+  questionId: string;
+  total: number;
+  correct: number;
+  wrong: number;
+  accuracy: number;
+  timedCount: number;
+  totalTimeSeconds: number;
+  averageTimeSeconds: number;
+  lastIsCorrect: boolean;
+  lastAttemptTimestamp: string;
+}
+
+/**
+ * Aggregates per-question accuracy and average response time (1 decimal place)
+ * across the given quiz attempts.
+ */
+export function calculateQuestionStats(
+  attempts: QuizAttempt[]
+): Map<string, QuestionPerformanceStat> {
+  const map = new Map<string, QuestionPerformanceStat>();
+  const chronological = [...attempts].sort(
+    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+  );
+
+  for (const att of chronological) {
+    for (const ans of att.answers) {
+      const cur = map.get(ans.questionId) || {
+        questionId: ans.questionId,
+        total: 0,
+        correct: 0,
+        wrong: 0,
+        accuracy: 0,
+        timedCount: 0,
+        totalTimeSeconds: 0,
+        averageTimeSeconds: 0,
+        lastIsCorrect: ans.isCorrect,
+        lastAttemptTimestamp: att.timestamp
+      };
+
+      cur.total += 1;
+      if (ans.isCorrect) cur.correct += 1;
+      else cur.wrong += 1;
+
+      if (typeof ans.timeSpentSeconds === 'number' && ans.timeSpentSeconds > 0) {
+        cur.timedCount += 1;
+        cur.totalTimeSeconds += ans.timeSpentSeconds;
+      }
+
+      cur.lastIsCorrect = ans.isCorrect;
+      cur.lastAttemptTimestamp = att.timestamp;
+      map.set(ans.questionId, cur);
+    }
+  }
+
+  for (const cur of map.values()) {
+    cur.accuracy = cur.total > 0 ? Math.round((cur.correct / cur.total) * 100) : 0;
+    cur.averageTimeSeconds =
+      cur.timedCount > 0 ? Math.round((cur.totalTimeSeconds / cur.timedCount) * 10) / 10 : 0;
+  }
+
+  return map;
+}
+

@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { Question, Team, Player, QuizAttempt } from '../types/basketball';
-import { Plus, Search, Star, Trash2, Edit3, X, Copy, ArrowUpDown, User } from 'lucide-react';
+import { calculateQuestionStats } from '../utils/quizEngine';
+import { Plus, Search, Star, Trash2, Edit3, X, Copy, ArrowUpDown, User, Clock } from 'lucide-react';
 
 interface QuestionBankViewProps {
   questions: Question[];
@@ -40,7 +41,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTag, setSelectedTag] = useState<string>('All');
   const [onlyFocus, setOnlyFocus] = useState<boolean>(false);
-  const [sortOrder, setSortOrder] = useState<'default' | 'lowest_accuracy' | 'highest_accuracy' | 'most_answered'>('default');
+  const [sortOrder, setSortOrder] = useState<'default' | 'lowest_accuracy' | 'highest_accuracy' | 'slowest_avg_time' | 'fastest_avg_time' | 'most_answered'>('default');
   const [isEditingLabels, setIsEditingLabels] = useState<boolean>(false);
   const [removingTag, setRemovingTag] = useState<string | null>(null);
 
@@ -48,7 +49,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
   const teamNameById = new Map(teams.map(t => [t.id, t.name]));
   const selectedPlayer = players.find(p => p.id === selectedPlayerFilter);
 
-  // Compute accuracy statistics per question (filtered by player and/or team if selected)
+  // Compute accuracy and average response time statistics per question (filtered by player and/or team if selected)
   const questionStatsMap = useMemo(() => {
     const relevantAttempts = attempts.filter(att => {
       if (selectedPlayerFilter && selectedPlayerFilter !== 'all' && att.playerId !== selectedPlayerFilter) {
@@ -60,23 +61,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
       return true;
     });
 
-    const map = new Map<string, { total: number; correct: number; wrong: number; accuracy: number }>();
-    for (const att of relevantAttempts) {
-      for (const ans of att.answers) {
-        const cur = map.get(ans.questionId) || { total: 0, correct: 0, wrong: 0, accuracy: 0 };
-        cur.total += 1;
-        if (ans.isCorrect) {
-          cur.correct += 1;
-        } else {
-          cur.wrong += 1;
-        }
-        map.set(ans.questionId, cur);
-      }
-    }
-    for (const cur of map.values()) {
-      cur.accuracy = cur.total > 0 ? Math.round((cur.correct / cur.total) * 100) : 0;
-    }
-    return map;
+    return calculateQuestionStats(relevantAttempts);
   }, [attempts, selectedPlayerFilter, selectedTeamFilter]);
 
   const filteredQuestions = useMemo(() => {
@@ -123,6 +108,26 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
         if (totalA > 0 && totalB === 0) return -1;
         if (totalA === 0 && totalB > 0) return 1;
         return accB - accA;
+      }
+      if (sortOrder === 'slowest_avg_time') {
+        const timedA = statA?.timedCount || 0;
+        const timedB = statB?.timedCount || 0;
+        if (timedA > 0 && timedB === 0) return -1;
+        if (timedA === 0 && timedB > 0) return 1;
+        const avgA = statA?.averageTimeSeconds || 0;
+        const avgB = statB?.averageTimeSeconds || 0;
+        if (avgB !== avgA) return avgB - avgA;
+        return totalB - totalA;
+      }
+      if (sortOrder === 'fastest_avg_time') {
+        const timedA = statA?.timedCount || 0;
+        const timedB = statB?.timedCount || 0;
+        if (timedA > 0 && timedB === 0) return -1;
+        if (timedA === 0 && timedB > 0) return 1;
+        const avgA = statA?.averageTimeSeconds || 0;
+        const avgB = statB?.averageTimeSeconds || 0;
+        if (avgA !== avgB) return avgA - avgB;
+        return totalB - totalA;
       }
       if (sortOrder === 'most_answered') {
         return totalB - totalA;
@@ -262,6 +267,8 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
             <option value="default">Neueste zuerst</option>
             <option value="lowest_accuracy">Niedrigste Quote (Problem-Fragen)</option>
             <option value="highest_accuracy">Höchste Quote</option>
+            <option value="slowest_avg_time">Längste Ø Zeit zuerst</option>
+            <option value="fastest_avg_time">Kürzeste Ø Zeit zuerst</option>
             <option value="most_answered">Meiste Antworten</option>
           </select>
         </div>
@@ -376,19 +383,30 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                     )}
                     <span aria-hidden="true">·</span>
                     {qStats && qStats.total > 0 ? (
-                      <span
-                        className={`inline-flex items-center gap-1 font-mono font-semibold px-2 py-0.5 rounded-md text-[11px] ${
-                          qStats.accuracy >= 75
-                            ? 'bg-emerald-950/70 border border-emerald-800/60 text-emerald-300'
-                            : qStats.accuracy >= 50
-                            ? 'bg-amber-950/70 border border-amber-800/60 text-amber-300'
-                            : 'bg-red-950/80 border border-red-800 text-red-200'
-                        }`}
-                        title={`${qStats.correct} von ${qStats.total} Antworten richtig`}
-                      >
-                        {qStats.accuracy}% Quote ({qStats.correct}/{qStats.total})
-                        {selectedPlayer && ` · ${selectedPlayer.name}`}
-                      </span>
+                      <>
+                        <span
+                          className={`inline-flex items-center gap-1 font-mono font-semibold px-2 py-0.5 rounded-md text-[11px] ${
+                            qStats.accuracy >= 75
+                              ? 'bg-emerald-950/70 border border-emerald-800/60 text-emerald-300'
+                              : qStats.accuracy >= 50
+                              ? 'bg-amber-950/70 border border-amber-800/60 text-amber-300'
+                              : 'bg-red-950/80 border border-red-800 text-red-200'
+                          }`}
+                          title={`${qStats.correct} von ${qStats.total} Antworten richtig`}
+                        >
+                          {qStats.accuracy}% Quote ({qStats.correct}/{qStats.total})
+                          {selectedPlayer && ` · ${selectedPlayer.name}`}
+                        </span>
+                        {qStats.averageTimeSeconds > 0 && (
+                          <span
+                            className="inline-flex items-center gap-1 font-mono font-medium px-2 py-0.5 rounded-md text-[11px] bg-zinc-950 border border-zinc-800 text-zinc-300 tabular-nums"
+                            title={`Durchschnittliche Antwortzeit über ${qStats.timedCount} ${qStats.timedCount === 1 ? 'Antwort' : 'Antworten'}`}
+                          >
+                            <Clock className="w-3 h-3 text-zinc-400" />
+                            Ø {qStats.averageTimeSeconds.toFixed(1)}s
+                          </span>
+                        )}
+                      </>
                     ) : (
                       <span className="text-[11px] text-zinc-500 font-mono">
                         Noch keine Antworten

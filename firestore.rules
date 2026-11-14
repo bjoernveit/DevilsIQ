@@ -72,11 +72,11 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
-    function isValidAttempt(data, attemptId) {
+    function isValidAttemptBase(data, attemptId) {
       return data.keys().hasAll(['id', 'playerId', 'timestamp', 'weekKey', 'totalScore', 'correctCount', 'totalQuestions', 'totalTimeSeconds', 'maxStreak', 'answers', 'createdAt'])
         && data.keys().hasOnly(['id', 'playerId', 'timestamp', 'weekKey', 'totalScore', 'correctCount', 'totalQuestions', 'totalTimeSeconds', 'maxStreak', 'answers', 'teamId', 'createdAt', 'passed'])
         && data.id is string && data.id == attemptId && data.id.size() <= 128
-        && data.playerId is string && data.playerId == request.auth.uid && data.playerId.size() <= 128
+        && data.playerId is string && data.playerId.size() >= 1 && data.playerId.size() <= 128
         && data.timestamp is string && data.timestamp.size() <= 64
         && data.weekKey is string && data.weekKey.size() <= 16 && data.weekKey.matches('^[0-9]{4}-W[0-9]{2}$')
         && data.totalScore is number && data.totalScore >= 0 && data.totalScore <= 10000
@@ -88,6 +88,11 @@ service cloud.firestore {
         && (!('teamId' in data) || (data.teamId is string && data.teamId.size() >= 1 && data.teamId.size() <= 128 && data.teamId.matches('^[a-zA-Z0-9_\\-]+$')))
         && (!('passed' in data) || data.passed is bool)
         && data.createdAt is timestamp;
+    }
+
+    function isValidAttempt(data, attemptId) {
+      return isValidAttemptBase(data, attemptId)
+        && data.playerId == request.auth.uid;
     }
 
     function isValidTeam(data, teamId) {
@@ -218,7 +223,23 @@ service cloud.firestore {
         && incoming().createdAt == request.time
         && !exists(/databases/$(database)/documents/deleted_users/$(request.auth.uid));
 
-      allow update: if false;
+      allow update: if isCoach() && isValidId(attemptId)
+        && isValidAttemptBase(incoming(), attemptId)
+        && incoming().id == existing().id
+        && incoming().playerId == existing().playerId
+        && incoming().timestamp == existing().timestamp
+        && incoming().weekKey == existing().weekKey
+        && incoming().totalScore == existing().totalScore
+        && incoming().correctCount == existing().correctCount
+        && incoming().totalQuestions == existing().totalQuestions
+        && incoming().totalTimeSeconds == existing().totalTimeSeconds
+        && incoming().maxStreak == existing().maxStreak
+        && incoming().answers == existing().answers
+        && incoming().createdAt == existing().createdAt
+        && (!('passed' in existing()) || incoming().passed == existing().passed)
+        && incoming().diff(existing()).affectedKeys().hasOnly(['teamId'])
+        && ('teamId' in incoming())
+        && exists(/databases/$(database)/documents/teams/$(incoming().teamId));
       allow delete: if isCoach() && isValidId(attemptId);
     }
 

@@ -32,6 +32,7 @@ import {
   updateTeamInFirestore,
   setDefaultTeamInFirestore,
   deleteTeamFromFirestore,
+  migrateAllAttemptsToTeam,
   toIsoString
 } from './lib/firebase';
 import { AuthScreen } from './components/AuthScreen';
@@ -50,6 +51,7 @@ import { Play, ClipboardList, SlidersHorizontal } from 'lucide-react';
 
 type TabType = 'quiz' | 'coach';
 type CoachSubTab = 'analytics' | 'teams' | 'questions';
+const MIGRATION_TARGET_TEAM_ID = 'team-1794576734987-pciz';
 
 export default function App() {
   const [authReady, setAuthReady] = useState(false);
@@ -88,6 +90,8 @@ export default function App() {
   const [isConfigOpen, setIsConfigOpen] = useState(false);
   const [configTargetTeam, setConfigTargetTeam] = useState<Team | null>(null);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const [isMigratingAttempts, setIsMigratingAttempts] = useState(false);
+  const [migrationMessage, setMigrationMessage] = useState<string | null>(null);
 
   // Listen to Firebase Auth state
   useEffect(() => {
@@ -667,6 +671,56 @@ export default function App() {
                 </button>
               </div>
             </div>
+
+            {/* Temporary one-click migration banner */}
+            {(() => {
+              const pendingCount = attempts.filter(a => a.teamId !== MIGRATION_TARGET_TEAM_ID).length;
+              const targetTeam = teams.find(t => t.id === MIGRATION_TARGET_TEAM_ID);
+              return (
+                <div className="bg-amber-950/35 border border-amber-700/60 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="space-y-0.5 min-w-0">
+                    <p className="text-xs font-semibold text-amber-200">
+                      Einmalige Daten-Migration → {targetTeam ? `${targetTeam.name} (${MIGRATION_TARGET_TEAM_ID})` : MIGRATION_TARGET_TEAM_ID}
+                    </p>
+                    <p className="text-[11px] text-amber-100/80 tabular-nums">
+                      {!targetTeam
+                        ? `Team ${MIGRATION_TARGET_TEAM_ID} nicht gefunden.`
+                        : pendingCount > 0
+                        ? `${pendingCount} von ${attempts.length} Versuchen werden diesem Team zugeordnet.`
+                        : `Alle ${attempts.length} Versuche sind bereits diesem Team zugeordnet.`}
+                    </p>
+                    {migrationMessage && (
+                      <p className="text-[11px] font-medium text-emerald-300 pt-0.5">
+                        {migrationMessage}
+                      </p>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    disabled={isMigratingAttempts || !targetTeam || pendingCount === 0}
+                    onClick={async () => {
+                      setIsMigratingAttempts(true);
+                      setMigrationMessage(null);
+                      try {
+                        const updatedCount = await migrateAllAttemptsToTeam(MIGRATION_TARGET_TEAM_ID);
+                        setMigrationMessage(`${updatedCount} Versuche erfolgreich migriert.`);
+                      } catch {
+                        setMigrationMessage('Migration fehlgeschlagen. Bitte prüfen.');
+                      } finally {
+                        setIsMigratingAttempts(false);
+                      }
+                    }}
+                    className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-black font-semibold text-xs shrink-0 min-h-[38px] transition-colors"
+                  >
+                    {isMigratingAttempts
+                      ? 'Migriere...'
+                      : pendingCount === 0
+                      ? 'Bereits migriert'
+                      : `Versuche migrieren (${pendingCount})`}
+                  </button>
+                </div>
+              );
+            })()}
 
             {coachSubTab === 'analytics' ? (
               <CoachAnalyticsView

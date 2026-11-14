@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { Timestamp, collection, doc, onSnapshot, query, where } from 'firebase/firestore';
+import { Timestamp, collection, doc, getDoc, getDocs, onSnapshot, query, where } from 'firebase/firestore';
 import { Player, Question, QuizAttempt, QuizConfig, Team } from './types/basketball';
 import { ALL_TAGS } from './data/initialData';
 import {
@@ -135,153 +135,88 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // Attach Firestore real-time listeners only when authenticated & profile exists
-  useEffect(() => {
+  // Load all app data efficiently via getDocs to prevent 50k+ read spikes from real-time snapshot broadcasting
+  const loadAppData = async () => {
     if (!firebaseUser || !profileReady) return;
+    try {
+      const [usersSnap, questionsSnap, attemptsSnap, teamsSnap, configSnap] = await Promise.all([
+        getDocs(query(collection(db, 'users'), where('role', 'in', ['player', 'coach']))),
+        getDocs(query(collection(db, 'questions'), where('isPriorityFocus', 'in', [true, false]))),
+        getDocs(query(collection(db, 'attempts'), where('totalQuestions', '>', 0))),
+        getDocs(query(collection(db, 'teams'), where('questionCount', '>=', 1))),
+        getDoc(doc(db, 'team_meta', 'quiz_config'))
+      ]);
 
-    const usersQuery = query(collection(db, 'users'), where('role', 'in', ['player', 'coach']));
-    const unsubUsers = onSnapshot(
-      usersQuery,
-      snapshot => {
-        const list: Player[] = snapshot.docs.map(docSnap => {
-          const data = docSnap.data({ serverTimestamps: 'estimate' });
-          const rawLastRound = data.lastRoundStartedAt;
-          const lastRoundStartedAt =
-            rawLastRound instanceof Timestamp
-              ? rawLastRound.toDate().toISOString()
-              : typeof rawLastRound === 'string' && rawLastRound.trim().length > 0
-              ? rawLastRound
-              : undefined;
+      const listPlayers: Player[] = usersSnap.docs.map((docSnap: any) => {
+        const data = docSnap.data({ serverTimestamps: 'estimate' });
+        const rawLastRound = data.lastRoundStartedAt;
+        const lastRoundStartedAt =
+          rawLastRound instanceof Timestamp
+            ? rawLastRound.toDate().toISOString()
+            : typeof rawLastRound === 'string' && rawLastRound.trim().length > 0
+            ? rawLastRound
+            : undefined;
+        return {
+          id: docSnap.id,
+          name: String(data.displayName || data.username || 'Spieler'),
+          username: data.username ? String(data.username) : undefined,
+          avatarColor: '#171717',
+          role: data.role === 'coach' ? 'coach' : 'player',
+          ...(lastRoundStartedAt ? { lastRoundStartedAt } : {})
+        };
+      });
+      setPlayers(listPlayers);
+
+      const listQuestions: Question[] = questionsSnap.docs
+        .map((docSnap: any) => {
+          const data = docSnap.data();
           return {
             id: docSnap.id,
-            name: String(data.displayName || data.username || 'Spieler'),
-            username: data.username ? String(data.username) : undefined,
-            avatarColor: '#171717',
-            role: data.role === 'coach' ? 'coach' : 'player',
-            ...(lastRoundStartedAt ? { lastRoundStartedAt } : {})
-          };
-        });
-        setPlayers(list);
-      },
-      error => {
-        handleFirestoreError(error, OperationType.LIST, 'users');
-      }
-    );
+            title: String(data.title || ''),
+            scenario: String(data.scenario || ''),
+            keyConcept: String(data.keyConcept || ''),
+            isPriorityFocus: Boolean(data.isPriorityFocus),
+            tags: Array.isArray(data.tags) ? data.tags.map(String) : [],
+            teamIds: Array.isArray(data.teamIds) ? data.teamIds.map(String) : undefined,
+            explanation: String(data.explanation || ''),
+            options: Array.isArray(data.options) ? data.options : [],
+            diagram: data.diagram || undefined,
+            imageUrl: data.imageUrl ? String(data.imageUrl) : undefined,
+            createdAt: toIsoString(data.createdAt)
+          } as Question;
+        })
+        .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      setQuestions(listQuestions);
 
-    setNowMs(Date.now());
-    const onlineTicker = setInterval(() => {
-      setNowMs(Date.now());
-    }, 10_000);
-
-    const questionsQuery = query(
-      collection(db, 'questions'),
-      where('isPriorityFocus', 'in', [true, false])
-    );
-    const unsubQuestions = onSnapshot(
-      questionsQuery,
-      snapshot => {
-        const list: Question[] = snapshot.docs
-          .map(docSnap => {
-            const data = docSnap.data();
-            return {
-              id: docSnap.id,
-              title: String(data.title || ''),
-              scenario: String(data.scenario || ''),
-              keyConcept: String(data.keyConcept || ''),
-              isPriorityFocus: Boolean(data.isPriorityFocus),
-              tags: Array.isArray(data.tags) ? data.tags.map(String) : [],
-              teamIds: Array.isArray(data.teamIds) ? data.teamIds.map(String) : undefined,
-              explanation: String(data.explanation || ''),
-              options: Array.isArray(data.options) ? data.options : [],
-              diagram: data.diagram || undefined,
-              imageUrl: data.imageUrl ? String(data.imageUrl) : undefined,
-              createdAt: toIsoString(data.createdAt)
-            } as Question;
-          })
-          .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-        setQuestions(list);
-      },
-      error => {
-        handleFirestoreError(error, OperationType.LIST, 'questions');
-      }
-    );
-
-    const attemptsQuery = query(collection(db, 'attempts'), where('totalQuestions', '>', 0));
-    const unsubAttempts = onSnapshot(
-      attemptsQuery,
-      snapshot => {
-        const list: QuizAttempt[] = snapshot.docs
-          .map(docSnap => {
-            const data = docSnap.data();
-            return {
-              id: docSnap.id,
-              playerId: String(data.playerId || ''),
-              teamId: data.teamId ? String(data.teamId) : undefined,
-              timestamp: String(data.timestamp || toIsoString(data.createdAt)),
-              weekKey: String(data.weekKey || ''),
-              totalScore: Number(data.totalScore || 0),
-              correctCount: Number(data.correctCount || 0),
-              totalQuestions: Number(data.totalQuestions || 1),
-              totalTimeSeconds: Number(data.totalTimeSeconds || 0),
-              maxStreak: Number(data.maxStreak || 0),
-              answers: Array.isArray(data.answers) ? data.answers : [],
-              passed: typeof data.passed === 'boolean' ? data.passed : undefined
-            } as QuizAttempt;
-          })
-          .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-        setAttempts(list);
-      },
-      error => {
-        handleFirestoreError(error, OperationType.LIST, 'attempts');
-      }
-    );
-
-    const teamsQuery = query(collection(db, 'teams'), where('questionCount', '>=', 1));
-    const unsubTeams = onSnapshot(
-      teamsQuery,
-      snapshot => {
-        const list: Team[] = snapshot.docs
-          .map(docSnap => {
-            const data = docSnap.data();
-            return {
-              id: docSnap.id,
-              name: String(data.name || ''),
-              playerIds: Array.isArray(data.playerIds) ? data.playerIds.map(String) : [],
-              isDefault: Boolean(data.isDefault),
-              questionCount: Number(data.questionCount || DEFAULT_QUIZ_CONFIG.questionCount),
-              timePerQuestionSeconds: Number(
-                data.timePerQuestionSeconds || DEFAULT_QUIZ_CONFIG.timePerQuestionSeconds
-              ),
-              prioritizeFocusQuestions:
-                data.prioritizeFocusQuestions !== undefined
-                  ? Boolean(data.prioritizeFocusQuestions)
-                  : DEFAULT_QUIZ_CONFIG.prioritizeFocusQuestions,
-              ensureDiverseTopics:
-                data.ensureDiverseTopics !== undefined
-                  ? Boolean(data.ensureDiverseTopics)
-                  : DEFAULT_QUIZ_CONFIG.ensureDiverseTopics,
-              selectedTags: Array.isArray(data.selectedTags)
-                ? data.selectedTags.map(String)
-                : undefined,
-              createdBy: String(data.createdBy || ''),
-              createdAt: toIsoString(data.createdAt),
-              updatedAt: toIsoString(data.updatedAt)
-            } as Team;
-          })
-          .sort((a, b) => a.name.localeCompare(b.name, 'de'));
-        setTeams(list);
-      },
-      error => {
-        handleFirestoreError(error, OperationType.LIST, 'teams');
-      }
-    );
-
-    const unsubConfig = onSnapshot(
-      doc(db, 'team_meta', 'quiz_config'),
-      docSnap => {
-        if (docSnap.exists()) {
+      const listAttempts: QuizAttempt[] = attemptsSnap.docs
+        .map((docSnap: any) => {
           const data = docSnap.data();
-          setQuizConfig({
+          return {
+            id: docSnap.id,
+            playerId: String(data.playerId || ''),
+            teamId: data.teamId ? String(data.teamId) : undefined,
+            timestamp: String(data.timestamp || toIsoString(data.createdAt)),
+            weekKey: String(data.weekKey || ''),
+            totalScore: Number(data.totalScore || 0),
+            correctCount: Number(data.correctCount || 0),
+            totalQuestions: Number(data.totalQuestions || 1),
+            totalTimeSeconds: Number(data.totalTimeSeconds || 0),
+            maxStreak: Number(data.maxStreak || 0),
+            answers: Array.isArray(data.answers) ? data.answers : [],
+            passed: typeof data.passed === 'boolean' ? data.passed : undefined
+          } as QuizAttempt;
+        })
+        .sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      setAttempts(listAttempts);
+
+      const listTeams: Team[] = teamsSnap.docs
+        .map((docSnap: any) => {
+          const data = docSnap.data();
+          return {
+            id: docSnap.id,
+            name: String(data.name || ''),
+            playerIds: Array.isArray(data.playerIds) ? data.playerIds.map(String) : [],
+            isDefault: Boolean(data.isDefault),
             questionCount: Number(data.questionCount || DEFAULT_QUIZ_CONFIG.questionCount),
             timePerQuestionSeconds: Number(
               data.timePerQuestionSeconds || DEFAULT_QUIZ_CONFIG.timePerQuestionSeconds
@@ -294,15 +229,49 @@ export default function App() {
               data.ensureDiverseTopics !== undefined
                 ? Boolean(data.ensureDiverseTopics)
                 : DEFAULT_QUIZ_CONFIG.ensureDiverseTopics,
-            selectedTags: Array.isArray(data.selectedTags) ? data.selectedTags.map(String) : undefined,
-            topicLabels: Array.isArray(data.topicLabels) ? data.topicLabels.map(String) : undefined
-          });
-        }
-      },
-      error => {
-        handleFirestoreError(error, OperationType.GET, 'team_meta/quiz_config');
+            selectedTags: Array.isArray(data.selectedTags)
+              ? data.selectedTags.map(String)
+              : undefined,
+            createdBy: String(data.createdBy || ''),
+            createdAt: toIsoString(data.createdAt),
+            updatedAt: toIsoString(data.updatedAt)
+          } as Team;
+        })
+        .sort((a: any, b: any) => a.name.localeCompare(b.name, 'de'));
+      setTeams(listTeams);
+
+      if (configSnap.exists()) {
+        const data = configSnap.data();
+        setQuizConfig({
+          questionCount: Number(data.questionCount || DEFAULT_QUIZ_CONFIG.questionCount),
+          timePerQuestionSeconds: Number(
+            data.timePerQuestionSeconds || DEFAULT_QUIZ_CONFIG.timePerQuestionSeconds
+          ),
+          prioritizeFocusQuestions:
+            data.prioritizeFocusQuestions !== undefined
+              ? Boolean(data.prioritizeFocusQuestions)
+              : DEFAULT_QUIZ_CONFIG.prioritizeFocusQuestions,
+          ensureDiverseTopics:
+            data.ensureDiverseTopics !== undefined
+              ? Boolean(data.ensureDiverseTopics)
+              : DEFAULT_QUIZ_CONFIG.ensureDiverseTopics,
+          selectedTags: Array.isArray(data.selectedTags) ? data.selectedTags.map(String) : undefined,
+          topicLabels: Array.isArray(data.topicLabels) ? data.topicLabels.map(String) : undefined
+        });
       }
-    );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.LIST, 'app_data');
+    }
+  };
+
+  useEffect(() => {
+    if (!firebaseUser || !profileReady) return;
+    void loadAppData();
+
+    setNowMs(Date.now());
+    const onlineTicker = setInterval(() => {
+      setNowMs(Date.now());
+    }, 10_000);
 
     const unsubDeleted = onSnapshot(
       doc(db, 'deleted_users', firebaseUser.uid),
@@ -319,11 +288,6 @@ export default function App() {
 
     return () => {
       clearInterval(onlineTicker);
-      unsubUsers();
-      unsubQuestions();
-      unsubAttempts();
-      unsubTeams();
-      unsubConfig();
       unsubDeleted();
     };
   }, [firebaseUser, profileReady]);

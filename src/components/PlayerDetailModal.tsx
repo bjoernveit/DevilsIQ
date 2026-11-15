@@ -1,24 +1,26 @@
-import React, { useState, useMemo } from 'react';
-import { Player, QuizAttempt, Question } from '../types/basketball';
+import React, { useState, useMemo, useEffect } from 'react';
+import { Player, QuizAttempt, Question, UserDetails, UserStats } from '../types/basketball';
 import {
-  calculateTacticalGaps,
-  calculateWeeklyTrends,
+  calculateTacticalGapsFromQuestionStats,
+  buildUserDetailsFromAttempts,
   getWeekKey,
-  calculateCurrentErrorFreeStreak,
-  calculateBestErrorFreeStreak,
-  calculateQuestionStats,
   getOptionDisplayText,
   isPlayerOnline,
   PlayerMedals
 } from '../utils/quizEngine';
+import { isUserDetailsStale } from '../utils/aggregatesCache';
+import { fetchUserDetails, fetchAttemptsForPlayer } from '../lib/firebase';
 import { PlayerLabel } from './PlayerLabel';
 import { X, Trash2, Star, ExternalLink, ChevronDown, ChevronUp, AlertCircle, CheckCircle2, Flame, Clock } from 'lucide-react';
 
 interface PlayerDetailModalProps {
   player: Player | null;
-  attempts: QuizAttempt[];
+  attempts?: QuizAttempt[];
   questions: Question[];
   medals?: PlayerMedals;
+  cachedDetails?: UserDetails | null;
+  playerStats?: UserStats | null;
+  onDetailsLoaded?: (userId: string, details: UserDetails) => void;
   nowMs?: number;
   isOpen: boolean;
   onClose: () => void;
@@ -32,9 +34,12 @@ interface PlayerDetailModalProps {
 
 export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
   player,
-  attempts,
+  attempts = [],
   questions,
   medals,
+  cachedDetails = null,
+  playerStats = null,
+  onDetailsLoaded,
   nowMs = Date.now(),
   isOpen,
   onClose,
@@ -55,7 +60,10 @@ export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
   const [isDeleting, setIsDeleting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  React.useEffect(() => {
+  const [userDetails, setUserDetails] = useState<UserDetails | null>(null);
+  const [isLoadingAttempts, setIsLoadingAttempts] = useState(false);
+
+  useEffect(() => {
     setActiveTab('overview');
     setQuestionSubFilter('all');
     setQuestionSort('lowest_accuracy');
@@ -63,59 +71,76 @@ export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
     setConfirmDelete(false);
     setIsDeleting(false);
     setActionError(null);
-  }, [isOpen, player?.id]);
 
-  const currentWeek = getWeekKey();
-  const playerAttempts = useMemo(() => {
-    if (!player) return [];
-    return attempts
-      .filter(a => a.playerId === player.id)
-      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-  }, [attempts, player?.id]);
+    if (!isOpen || !player) {
+      setUserDetails(null);
+      return;
+    }
 
-  const thisWeekAttempts = playerAttempts.filter(a => a.weekKey === currentWeek);
-  const thisWeekPassed = thisWeekAttempts.some(a => a.passed === true || a.correctCount === a.totalQuestions);
-  const passedAttempts = playerAttempts.filter(a => a.passed === true || a.correctCount === a.totalQuestions);
-  const averagePassedTime = passedAttempts.length > 0
-    ? Math.round((passedAttempts.reduce((sum, a) => sum + a.totalTimeSeconds, 0) / passedAttempts.length) * 10) / 10
-    : 0;
-  const currentStreak = useMemo(
-    () => calculateCurrentErrorFreeStreak(playerAttempts),
-    [playerAttempts]
-  );
-  const bestStreak = useMemo(
-    () => calculateBestErrorFreeStreak(playerAttempts),
-    [playerAttempts]
-  );
+    if (cachedDetails && cachedDetails.userId === player.id && !isUserDetailsStale(cachedDetails, playerStats)) {
+      setUserDetails(cachedDetails);
+      setIsLoadingAttempts(false);
+      return;
+    }
 
-  const playerGaps = useMemo(() => {
-    if (!player) return [];
-    return calculateTacticalGaps(questions, playerAttempts, player.id).filter(g => g.totalAnswered > 0);
-  }, [questions, playerAttempts, player?.id]);
+    let cancelled = false;
+    setIsLoadingAttempts(true);
 
-  const playerTrends = useMemo(() => {
-    if (!player) return [];
-    return calculateWeeklyTrends(attempts, player.id);
-  }, [attempts, player?.id]);
+    (async () => {
+      try {
+        const precalculated = await fetchUserDetails(player.id);
+        if (cancelled) return;
+        if (precalculated) {
+          setUserDetails(precalculated);
+          onDetailsLoaded?.(player.id, precalculated);
+          return;
+        }
 
-  const overallAvgQuestionTime = useMemo(() => {
-    let sum = 0;
-    let count = 0;
-    for (const att of playerAttempts) {
-      for (const ans of att.answers) {
-        if (typeof ans.timeSpentSeconds === 'number' && ans.timeSpentSeconds > 0) {
-          sum += ans.timeSpentSeconds;
-          count += 1;
+        // Fallback before initial migration: compute from player's attempts
+        const fetched = await fetchAttemptsForPlayer(player.id);
+        if (cancelled) return;
+        setUserDetails(buildUserDetailsFromAttempts(player.id, fetched));
+      } catch {
+        if (cancelled) return;
+        setUserDetails(buildUserDetailsFromAttempts(player.id, attempts));
+      } finally {
+        if (!cancelled) {
+          setIsLoadingAttempts(false);
         }
       }
-    }
-    return count > 0 ? Math.round((sum / count) * 10) / 10 : 0;
-  }, [playerAttempts]);
+    })();
 
-  // Compute question-by-question performance specifically for this player
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, player?.id, cachedDetails, playerStats]);
+
+  const currentWeek = getWeekKey();
+  const totalAttemptsCount = userDetails?.totalAttempts ?? 0;
+  const passedAttemptsCount = userDetails?.passedAttempts ?? 0;
+  const thisWeekPassed = userDetails
+    ? userDetails.currentWeekKey === currentWeek
+      ? userDetails.thisWeekPassed
+      : userDetails.recentAttempts.some(a => a.weekKey === currentWeek && a.passed)
+    : false;
+  const bestTimeAllTime = userDetails?.bestTimeAllTime ?? 0;
+  const averagePassedTime = userDetails?.averagePassedTime ?? 0;
+  const currentStreak = userDetails?.currentStreak ?? 0;
+  const bestStreak = userDetails?.bestStreak ?? 0;
+  const overallAvgQuestionTime = userDetails?.overallAvgQuestionTime ?? 0;
+  const playerTrends = userDetails?.weeklyTrends ?? [];
+  const recentAttempts = userDetails?.recentAttempts ?? [];
+
+  const playerGaps = useMemo(() => {
+    if (!player || !userDetails) return [];
+    return calculateTacticalGapsFromQuestionStats(questions, userDetails.questionStats).filter(
+      g => g.totalAnswered > 0
+    );
+  }, [questions, userDetails, player?.id]);
+
+  // Compute question-by-question performance specifically for this player from precalculated questionStats
   const playerQuestionStats = useMemo(() => {
-    if (!player) return [];
-    const statsMap = calculateQuestionStats(playerAttempts);
+    if (!player || !userDetails) return [];
     const questionMap = new Map<string, Question>(questions.map(q => [q.id, q]));
 
     const list: Array<{
@@ -131,9 +156,9 @@ export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
       isStruggling: boolean;
     }> = [];
 
-    statsMap.forEach((stat, qId) => {
-      const q = questionMap.get(qId);
-      if (!q) return;
+    for (const stat of userDetails.questionStats) {
+      const q = questionMap.get(stat.questionId);
+      if (!q) continue;
       const isStruggling = stat.accuracy < 90;
       list.push({
         question: q,
@@ -147,7 +172,7 @@ export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
         lastAttemptTimestamp: stat.lastAttemptTimestamp,
         isStruggling
       });
-    });
+    }
 
     return list.sort((a, b) => {
       if (questionSort === 'slowest') {
@@ -166,7 +191,7 @@ export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
       if (a.accuracy !== b.accuracy) return a.accuracy - b.accuracy;
       return b.wrong - a.wrong;
     });
-  }, [playerAttempts, questions, player?.id, questionSort]);
+  }, [userDetails, questions, player?.id, questionSort]);
 
   const canView = viewerIsCoach || (Boolean(currentUserId) && player?.id === currentUserId);
   if (!isOpen || !player || !canView) return null;
@@ -200,7 +225,7 @@ export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
             </h2>
             <p className="text-xs text-zinc-400">
               {isTargetCoach ? 'Trainer · ' : ''}
-              {playerAttempts.length} {playerAttempts.length === 1 ? 'Versuch' : 'Versuche'} gesamt
+              {totalAttemptsCount} {totalAttemptsCount === 1 ? 'Versuch' : 'Versuche'} gesamt
             </p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
@@ -234,8 +259,15 @@ export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
           </div>
         </div>
 
-        {/* Tab Switcher */}
-        <div className="flex border-b border-zinc-800 bg-zinc-950/60 px-5 pt-2 gap-4">
+        {isLoadingAttempts ? (
+          <div className="p-16 text-center space-y-3 flex-1 flex flex-col items-center justify-center">
+            <div className="inline-block w-8 h-8 border-2 border-red-600 border-t-transparent rounded-full animate-spin"></div>
+            <p className="text-xs text-zinc-400">Lade Spieler-Daten und Versuchshistorie...</p>
+          </div>
+        ) : (
+          <>
+            {/* Tab Switcher */}
+            <div className="flex border-b border-zinc-800 bg-zinc-950/60 px-5 pt-2 gap-4">
           <button
             type="button"
             onClick={() => setActiveTab('overview')}
@@ -283,7 +315,7 @@ export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
                 <div className="p-3 bg-zinc-950 rounded-xl border border-zinc-800">
                   <div className="text-[11px] text-zinc-400">Bestanden / Gesamt</div>
                   <div className="text-base font-bold font-mono tabular-nums text-white mt-0.5">
-                    {passedAttempts.length} / {playerAttempts.length}
+                    {passedAttemptsCount} / {totalAttemptsCount}
                   </div>
                   {overallAvgQuestionTime > 0 && (
                     <div className="text-[10px] text-zinc-500 font-mono tabular-nums">
@@ -293,11 +325,11 @@ export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
                 </div>
                 <div className="p-3 bg-zinc-950 rounded-xl border border-zinc-800">
                   <div className="text-[11px] text-zinc-400">
-                    {averagePassedTime > 0 && passedAttempts.length > 1 ? `Bestzeit (Ø ${averagePassedTime.toFixed(1)}s)` : 'Bestzeit'}
+                    {averagePassedTime > 0 && passedAttemptsCount > 1 ? `Bestzeit (Ø ${averagePassedTime.toFixed(1)}s)` : 'Bestzeit'}
                   </div>
                   <div className="text-base font-bold font-mono tabular-nums text-white mt-0.5">
-                    {passedAttempts.length > 0
-                      ? `${Math.min(...passedAttempts.map(a => a.totalTimeSeconds)).toFixed(1)}s`
+                    {bestTimeAllTime > 0
+                      ? `${bestTimeAllTime.toFixed(1)}s`
                       : '—'}
                   </div>
                 </div>
@@ -391,13 +423,13 @@ export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
                 <h3 className="text-xs font-semibold text-zinc-400">
                   Letzte Versuche
                 </h3>
-                {playerAttempts.length === 0 ? (
+                {recentAttempts.length === 0 ? (
                   <div className="text-xs text-zinc-400 py-4 text-center bg-zinc-950 border border-zinc-800 rounded-xl">
                     Noch keine Quiz-Versuche erfasst.
                   </div>
                 ) : (
                   <div className="divide-y divide-zinc-800 border border-zinc-800 rounded-xl overflow-hidden">
-                    {playerAttempts.map(att => (
+                    {recentAttempts.map(att => (
                       <div key={att.id} className="flex items-center justify-between px-3.5 py-2.5 text-xs bg-zinc-950">
                         <div>
                           <div className="font-medium text-white">{att.weekKey}</div>
@@ -750,6 +782,8 @@ export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
             </div>
           )}
         </div>
+      </>
+        )}
       </div>
     </div>
   );

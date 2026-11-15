@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
-import { Question, Team, Player, QuizAttempt } from '../types/basketball';
-import { calculateQuestionStats } from '../utils/quizEngine';
+import { Question, Team, Player, QuizAttempt, UserDetails } from '../types/basketball';
+import { calculateQuestionStats, aggregateQuestionStatsFromUserDetails } from '../utils/quizEngine';
 import { Plus, Search, Star, Trash2, Edit3, X, Copy, ArrowUpDown, User, Clock } from 'lucide-react';
 
 interface QuestionBankViewProps {
@@ -8,6 +8,7 @@ interface QuestionBankViewProps {
   teams: Team[];
   players?: Player[];
   attempts?: QuizAttempt[];
+  userDetailsMap?: Map<string, UserDetails>;
   selectedTeamFilter: string;
   onChangeTeamFilter: (teamFilter: string) => void;
   selectedPlayerFilter?: string;
@@ -26,6 +27,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
   teams,
   players = [],
   attempts = [],
+  userDetailsMap,
   selectedTeamFilter,
   onChangeTeamFilter,
   selectedPlayerFilter = 'all',
@@ -49,20 +51,36 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
   const teamNameById = new Map(teams.map(t => [t.id, t.name]));
   const selectedPlayer = players.find(p => p.id === selectedPlayerFilter);
 
-  // Compute accuracy and average response time statistics per question (filtered by player and/or team if selected)
+  // Compute accuracy and average response time statistics per question (from raw attempts if loaded, else aggregated user_details)
   const questionStatsMap = useMemo(() => {
-    const relevantAttempts = attempts.filter(att => {
-      if (selectedPlayerFilter && selectedPlayerFilter !== 'all' && att.playerId !== selectedPlayerFilter) {
-        return false;
-      }
-      if (selectedTeamFilter && selectedTeamFilter !== 'all' && selectedTeamFilter !== 'global') {
-        if (att.teamId && att.teamId !== selectedTeamFilter) return false;
-      }
-      return true;
-    });
+    if (attempts.length > 0) {
+      const relevantAttempts = attempts.filter(att => {
+        if (selectedPlayerFilter && selectedPlayerFilter !== 'all' && att.playerId !== selectedPlayerFilter) {
+          return false;
+        }
+        if (selectedTeamFilter && selectedTeamFilter !== 'all' && selectedTeamFilter !== 'global') {
+          if (att.teamId && att.teamId !== selectedTeamFilter) return false;
+        }
+        return true;
+      });
 
-    return calculateQuestionStats(relevantAttempts);
-  }, [attempts, selectedPlayerFilter, selectedTeamFilter]);
+      return calculateQuestionStats(relevantAttempts);
+    }
+
+    if (userDetailsMap && userDetailsMap.size > 0) {
+      const selectedTeam =
+        selectedTeamFilter && selectedTeamFilter !== 'all' && selectedTeamFilter !== 'global'
+          ? teams.find(t => t.id === selectedTeamFilter) || null
+          : null;
+      const teamPlayerIds = selectedTeam ? new Set(selectedTeam.playerIds) : null;
+      return aggregateQuestionStatsFromUserDetails(Array.from(userDetailsMap.values()), {
+        playerIdFilter: selectedPlayerFilter,
+        teamPlayerIds
+      });
+    }
+
+    return calculateQuestionStats([]);
+  }, [attempts, userDetailsMap, teams, selectedPlayerFilter, selectedTeamFilter]);
 
   const filteredQuestions = useMemo(() => {
     const list = questions.filter(q => {

@@ -7,6 +7,7 @@ export interface Player {
   avatarColor: string;
   isCaptain?: boolean;
   role?: UserRole;
+  isAdmin?: boolean;
   lastRoundStartedAt?: string;
 }
 
@@ -62,6 +63,7 @@ export interface Question {
   explanation: string; // Master tactical breakdown
   keyConcept: string; // E.g. "Weakside Tag", "Drop Coverage", "Backdoor Cut"
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface QuizAttemptAnswer {
@@ -94,6 +96,7 @@ export interface QuizConfig {
   ensureDiverseTopics: boolean;
   selectedTags?: string[];
   topicLabels?: string[];
+  deletedQuestionIds?: string[];
 }
 
 export interface Team {
@@ -119,3 +122,63 @@ export interface TacticalGapReport {
   status: 'critical_gap' | 'needs_work' | 'solid' | 'mastered';
   sampleQuestionIds: string[];
 }
+
+export interface UserStats {
+  userId: string;
+  currentStreak: number;
+  bestStreak: number;
+  totalAttemptsAllTime: number;
+  attemptsThisWeek?: number;
+  currentWeekKey?: string;
+  bestScoreThisWeek: number;
+  bestScoreAllTime?: number;
+  updatedAt?: string;
+}
+
+export interface WeeklyTrendPoint {
+  weekKey: string;
+  attemptCount: number;
+  averageScore: number;
+  averageAccuracy: number;
+}
+
+export interface UserDetailsQuestionStat {
+  questionId: string;
+  total: number;
+  correct: number;
+  wrong: number;
+  accuracy: number;
+  timedCount: number;
+  totalTimeSeconds: number;
+  averageTimeSeconds: number;
+  lastIsCorrect: boolean;
+  lastAttemptTimestamp: string;
+}
+
+export interface UserDetailsRecentAttempt {
+  id: string;
+  weekKey: string;
+  timestamp: string;
+  totalTimeSeconds: number;
+  correctCount: number;
+  totalQuestions: number;
+  passed: boolean;
+}
+
+export interface UserDetails {
+  userId: string;
+  totalAttempts: number;
+  passedAttempts: number;
+  bestTimeAllTime: number;
+  averagePassedTime: number;
+  overallAvgQuestionTime: number;
+  currentStreak: number;
+  bestStreak: number;
+  currentWeekKey: string;
+  thisWeekPassed: boolean;
+  weeklyTrends: WeeklyTrendPoint[];
+  questionStats: UserDetailsQuestionStat[];
+  recentAttempts: UserDetailsRecentAttempt[];
+  updatedAt?: string;
+}
+

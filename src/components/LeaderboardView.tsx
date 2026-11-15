@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Player, QuizAttempt, Team } from '../types/basketball';
+import { Player, QuizAttempt, Team, UserStats } from '../types/basketball';
 import {
   calculateWeeklyLeaderboard,
   calculateAllTimeLeaderboard,
@@ -17,6 +17,7 @@ interface LeaderboardViewProps {
   activeTeam?: Team | null;
   teams?: Team[];
   medalsByPlayer?: Map<string, PlayerMedals>;
+  userStatsMap?: Map<string, UserStats>;
   nowMs?: number;
   onSelectPlayerDetail?: (player: Player) => void;
   viewerIsCoach?: boolean;
@@ -30,6 +31,7 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
   activeTeam = null,
   teams = [],
   medalsByPlayer,
+  userStatsMap,
   nowMs = Date.now(),
   onSelectPlayerDetail,
   viewerIsCoach = false,
@@ -64,8 +66,8 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
     : attempts.filter(a => a.playerId === currentPlayerId);
 
   const leaderboardData = boardType === 'weekly'
-    ? calculateWeeklyLeaderboard(scopedPlayers, scopedAttempts, selectedWeek)
-    : calculateAllTimeLeaderboard(scopedPlayers, scopedAttempts);
+    ? calculateWeeklyLeaderboard(scopedPlayers, scopedAttempts, selectedWeek, userStatsMap)
+    : calculateAllTimeLeaderboard(scopedPlayers, scopedAttempts, userStatsMap);
 
   const availableWeeks = Array.from(
     new Set([currentWeekKey, ...scopedAttempts.map(a => a.weekKey)])
@@ -228,7 +230,10 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
                       {isMe && <span className="text-red-400 font-normal text-xs shrink-0">(Du)</span>}
                     </div>
                     <div className="text-xs text-zinc-400 tabular-nums truncate">
-                      {item.attemptsThisWeek} {item.attemptsThisWeek === 1 ? 'Versuch' : 'Versuche'}
+                      {(() => {
+                        const displayAttempts = boardType === 'alltime' ? item.totalAttemptsAllTime : item.attemptsThisWeek;
+                        return `${displayAttempts} ${displayAttempts === 1 ? 'Versuch' : 'Versuche'}`;
+                      })()}
                       {playerTeams.length > 0 && ` · ${playerTeams.join(', ')}`}
                     </div>
                   </div>

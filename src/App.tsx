@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { Timestamp, collection, doc, getDoc, getDocs, onSnapshot, query, where } from 'firebase/firestore';
-import { Player, Question, QuizAttempt, QuizConfig, Team } from './types/basketball';
+import { Player, Question, QuizAttempt, QuizConfig, Team, UserStats, UserDetails } from './types/basketball';
 import { ALL_TAGS } from './data/initialData';
 import {
   filterQuestionsForTeam,
@@ -33,11 +33,33 @@ import {
   updateTeamInFirestore,
   setDefaultTeamInFirestore,
   deleteTeamFromFirestore,
-  migrateAllAttemptsToTeam,
   markRoundStartedInFirestore,
-  migrateAllUserStatsToFirestore,
+  trackedGetDoc,
+  trackedGetDocs,
+  subscribeToReadCount,
+  migrateAllUserAggregatesInFirestore,
+  fetchAllUserDetailsDeltaOrCold,
+  fetchUserStatsDeltaOrCold,
+  fetchQuestionsDeltaOrCold,
+  backfillMissingQuestionUpdatedAt,
+  QUESTIONS_CACHE_KEY,
+  USER_STATS_CACHE_KEY,
+  USER_DETAILS_CACHE_KEY,
   toIsoString
 } from './lib/firebase';
+import {
+  mergeQuestionsWithDelta,
+  writeQuestionsCache,
+  upsertQuestionsInCache,
+  removeQuestionFromCache
+} from './utils/questionCache';
+import {
+  readAggregatesCache,
+  writeAggregatesCache,
+  mergeAggregateEntriesWithDelta,
+  upsertAggregateEntriesInCache,
+  removeAggregateEntryFromCache
+} from './utils/aggregatesCache';
 import { AuthScreen } from './components/AuthScreen';
 import { ProfileModal } from './components/ProfileModal';
 import { PlayerHomeView } from './components/PlayerHomeView';
@@ -54,7 +76,7 @@ import { Play, ClipboardList, SlidersHorizontal } from 'lucide-react';
 
 type TabType = 'quiz' | 'coach';
 type CoachSubTab = 'analytics' | 'teams' | 'questions';
-const MIGRATION_TARGET_TEAM_ID = 'team-1794576734987-pciz';
+
 
 export default function App() {
   const [authReady, setAuthReady] = useState(false);
@@ -93,11 +115,19 @@ export default function App() {
   const [isConfigOpen, setIsConfigOpen] = useState(false);
   const [configTargetTeam, setConfigTargetTeam] = useState<Team | null>(null);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
-  const [isMigratingAttempts, setIsMigratingAttempts] = useState(false);
-  const [migrationMessage, setMigrationMessage] = useState<string | null>(null);
-  const [isMigratingStats, setIsMigratingStats] = useState(false);
-  const [statsMigrationMessage, setStatsMigrationMessage] = useState<string | null>(null);
+  const [userStatsMap, setUserStatsMap] = useState<Map<string, UserStats>>(new Map());
+  const [userDetailsMap, setUserDetailsMap] = useState<Map<string, UserDetails>>(new Map());
+  const [allUserDetailsLoaded, setAllUserDetailsLoaded] = useState(false);
+  const [isLoadingAllAttempts, setIsLoadingAllAttempts] = useState(false);
+  const [allAttemptsLoaded, setAllAttemptsLoaded] = useState(false);
+
+  const [documentReadCount, setDocumentReadCount] = useState(0);
   const [nowMs, setNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    const unsub = subscribeToReadCount(count => setDocumentReadCount(count));
+    return () => unsub();
+  }, []);
 
   // Listen to Firebase Auth state
   useEffect(() => {
@@ -125,6 +155,10 @@ export default function App() {
         setQuestions([]);
         setAttempts([]);
         setTeams([]);
+        setUserStatsMap(new Map());
+        setUserDetailsMap(new Map());
+        setAllUserDetailsLoaded(false);
+        setAllAttemptsLoaded(false);
         setQuizConfig(DEFAULT_QUIZ_CONFIG);
         setIsQuizActive(false);
         setActiveTab('quiz');
@@ -142,25 +176,13 @@ export default function App() {
   const loadAppData = async () => {
     if (!firebaseUser || !profileReady) return;
     try {
-      const [usersSnap, questionsSnap, attemptsSnap, teamsSnap, configSnap, userStatsSnap] = await Promise.all([
-        getDocs(query(collection(db, 'users'), where('role', 'in', ['player', 'coach']))),
-        getDocs(query(collection(db, 'questions'), where('isPriorityFocus', 'in', [true, false]))),
-        getDocs(query(collection(db, 'attempts'), where('totalQuestions', '>', 0))),
-        getDocs(query(collection(db, 'teams'), where('questionCount', '>=', 1))),
-        getDoc(doc(db, 'team_meta', 'quiz_config')),
-        getDocs(collection(db, 'user_stats'))
+      const [usersSnap, questionsSync, teamsSnap, configSnap, userStatsSync] = await Promise.all([
+        trackedGetDocs(query(collection(db, 'users'), where('role', 'in', ['player', 'coach']))),
+        fetchQuestionsDeltaOrCold(),
+        trackedGetDocs(query(collection(db, 'teams'), where('questionCount', '>=', 1))),
+        trackedGetDoc(doc(db, 'team_meta', 'quiz_config')),
+        fetchUserStatsDeltaOrCold()
       ]);
-
-      const statsMap = new Map<string, { currentStreak: number; bestStreak: number; totalAttemptsAllTime: number; bestScoreThisWeek: number }>();
-      userStatsSnap.docs.forEach((docSnap: any) => {
-        const d = docSnap.data();
-        statsMap.set(docSnap.id, {
-          currentStreak: Number(d.currentStreak || 0),
-          bestStreak: Number(d.bestStreak || 0),
-          totalAttemptsAllTime: Number(d.totalAttemptsAllTime || 0),
-          bestScoreThisWeek: Number(d.bestScoreThisWeek || 0)
-        });
-      });
 
       const listPlayers: Player[] = usersSnap.docs.map((docSnap: any) => {
         const data = docSnap.data({ serverTimestamps: 'estimate' });
@@ -177,52 +199,100 @@ export default function App() {
           username: data.username ? String(data.username) : undefined,
           avatarColor: '#171717',
           role: data.role === 'coach' ? 'coach' : 'player',
+          isAdmin: Boolean(data.isAdmin),
           ...(lastRoundStartedAt ? { lastRoundStartedAt } : {})
         };
       });
       setPlayers(listPlayers);
 
-      const listQuestions: Question[] = questionsSnap.docs
-        .map((docSnap: any) => {
-          const data = docSnap.data();
-          return {
-            id: docSnap.id,
-            title: String(data.title || ''),
-            scenario: String(data.scenario || ''),
-            keyConcept: String(data.keyConcept || ''),
-            isPriorityFocus: Boolean(data.isPriorityFocus),
-            tags: Array.isArray(data.tags) ? data.tags.map(String) : [],
-            teamIds: Array.isArray(data.teamIds) ? data.teamIds.map(String) : undefined,
-            explanation: String(data.explanation || ''),
-            options: Array.isArray(data.options) ? data.options : [],
-            diagram: data.diagram || undefined,
-            imageUrl: data.imageUrl ? String(data.imageUrl) : undefined,
-            createdAt: toIsoString(data.createdAt)
-          } as Question;
-        })
-        .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-      setQuestions(listQuestions);
+      const validPlayerIds = new Set(listPlayers.map(p => p.id));
+      const mergedStats = mergeAggregateEntriesWithDelta(
+        userStatsSync.cachedEntries,
+        userStatsSync.fetchedEntries,
+        validPlayerIds
+      );
+      setUserStatsMap(new Map(mergedStats.map(s => [s.userId, s])));
 
-      const listAttempts: QuizAttempt[] = attemptsSnap.docs
-        .map((docSnap: any) => {
-          const data = docSnap.data();
-          return {
-            id: docSnap.id,
-            playerId: String(data.playerId || ''),
-            teamId: data.teamId ? String(data.teamId) : undefined,
-            timestamp: String(data.timestamp || toIsoString(data.createdAt)),
-            weekKey: String(data.weekKey || ''),
-            totalScore: Number(data.totalScore || 0),
-            correctCount: Number(data.correctCount || 0),
-            totalQuestions: Number(data.totalQuestions || 1),
-            totalTimeSeconds: Number(data.totalTimeSeconds || 0),
-            maxStreak: Number(data.maxStreak || 0),
-            answers: Array.isArray(data.answers) ? data.answers : [],
-            passed: typeof data.passed === 'boolean' ? data.passed : undefined
-          } as QuizAttempt;
-        })
-        .sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-      setAttempts(listAttempts);
+      if (
+        !userStatsSync.isDelta ||
+        userStatsSync.fetchedEntries.length > 0 ||
+        mergedStats.length !== userStatsSync.cachedEntries.length
+      ) {
+        writeAggregatesCache(USER_STATS_CACHE_KEY, {
+          version: 1,
+          lastSyncedCursor: userStatsSync.nextCursor,
+          entries: mergedStats
+        });
+      }
+
+      // Hydrate UserDetails from localStorage cache (0 Firestore reads) and prune deleted players
+      const cachedDetailsData = readAggregatesCache<UserDetails>(USER_DETAILS_CACHE_KEY);
+      if (cachedDetailsData && cachedDetailsData.entries.length > 0) {
+        const prunedDetails = mergeAggregateEntriesWithDelta(
+          cachedDetailsData.entries,
+          [],
+          validPlayerIds
+        );
+        setUserDetailsMap(new Map(prunedDetails.map(d => [d.userId, d])));
+        if (prunedDetails.length !== cachedDetailsData.entries.length) {
+          writeAggregatesCache(USER_DETAILS_CACHE_KEY, {
+            version: 1,
+            lastSyncedCursor: cachedDetailsData.lastSyncedCursor,
+            entries: prunedDetails
+          });
+        }
+      }
+
+      let deletedQuestionIds: string[] = [];
+      if (configSnap.exists()) {
+        const data = configSnap.data();
+        deletedQuestionIds = Array.isArray(data.deletedQuestionIds)
+          ? data.deletedQuestionIds.map(String)
+          : [];
+        setQuizConfig({
+          questionCount: Number(data.questionCount || DEFAULT_QUIZ_CONFIG.questionCount),
+          timePerQuestionSeconds: Number(
+            data.timePerQuestionSeconds || DEFAULT_QUIZ_CONFIG.timePerQuestionSeconds
+          ),
+          prioritizeFocusQuestions:
+            data.prioritizeFocusQuestions !== undefined
+              ? Boolean(data.prioritizeFocusQuestions)
+              : DEFAULT_QUIZ_CONFIG.prioritizeFocusQuestions,
+          ensureDiverseTopics:
+            data.ensureDiverseTopics !== undefined
+              ? Boolean(data.ensureDiverseTopics)
+              : DEFAULT_QUIZ_CONFIG.ensureDiverseTopics,
+          selectedTags: Array.isArray(data.selectedTags) ? data.selectedTags.map(String) : undefined,
+          topicLabels: Array.isArray(data.topicLabels) ? data.topicLabels.map(String) : undefined,
+          deletedQuestionIds: deletedQuestionIds.length > 0 ? deletedQuestionIds : undefined
+        });
+      }
+
+      const mergedQuestions = mergeQuestionsWithDelta(
+        questionsSync.cachedQuestions,
+        questionsSync.fetchedQuestions,
+        deletedQuestionIds
+      );
+      setQuestions(mergedQuestions);
+
+      if (
+        !questionsSync.isDelta ||
+        questionsSync.fetchedQuestions.length > 0 ||
+        mergedQuestions.length !== questionsSync.cachedQuestions.length
+      ) {
+        writeQuestionsCache(QUESTIONS_CACHE_KEY, {
+          version: 1,
+          lastSyncedCursor: questionsSync.nextCursor,
+          questions: mergedQuestions
+        });
+      }
+
+      const loadedUserIsCoach = listPlayers.some(p => p.id === firebaseUser.uid && p.role === 'coach');
+      if (loadedUserIsCoach && questionsSync.missingUpdatedAtIds.length > 0) {
+        void backfillMissingQuestionUpdatedAt(questionsSync.missingUpdatedAtIds).catch(() => {});
+      }
+
+      // Attempts are not loaded on page load to conserve Firestore reads (aggregated user_stats are used instead)
 
       const listTeams: Team[] = teamsSnap.docs
         .map((docSnap: any) => {
@@ -254,28 +324,41 @@ export default function App() {
         })
         .sort((a: any, b: any) => a.name.localeCompare(b.name, 'de'));
       setTeams(listTeams);
-
-      if (configSnap.exists()) {
-        const data = configSnap.data();
-        setQuizConfig({
-          questionCount: Number(data.questionCount || DEFAULT_QUIZ_CONFIG.questionCount),
-          timePerQuestionSeconds: Number(
-            data.timePerQuestionSeconds || DEFAULT_QUIZ_CONFIG.timePerQuestionSeconds
-          ),
-          prioritizeFocusQuestions:
-            data.prioritizeFocusQuestions !== undefined
-              ? Boolean(data.prioritizeFocusQuestions)
-              : DEFAULT_QUIZ_CONFIG.prioritizeFocusQuestions,
-          ensureDiverseTopics:
-            data.ensureDiverseTopics !== undefined
-              ? Boolean(data.ensureDiverseTopics)
-              : DEFAULT_QUIZ_CONFIG.ensureDiverseTopics,
-          selectedTags: Array.isArray(data.selectedTags) ? data.selectedTags.map(String) : undefined,
-          topicLabels: Array.isArray(data.topicLabels) ? data.topicLabels.map(String) : undefined
-        });
-      }
     } catch (error) {
       handleFirestoreError(error, OperationType.LIST, 'app_data');
+    }
+  };
+
+  const handleLoadAllAttempts = async () => {
+    if (isLoadingAllAttempts || allAttemptsLoaded) return;
+    setIsLoadingAllAttempts(true);
+    try {
+      const snap = await trackedGetDocs(collection(db, 'attempts'));
+      const listAttempts: QuizAttempt[] = snap.docs
+        .map((docSnap: any) => {
+          const data = docSnap.data();
+          return {
+            id: docSnap.id,
+            playerId: String(data.playerId || ''),
+            teamId: data.teamId ? String(data.teamId) : undefined,
+            timestamp: String(data.timestamp || toIsoString(data.createdAt)),
+            weekKey: String(data.weekKey || ''),
+            totalScore: Number(data.totalScore || 0),
+            correctCount: Number(data.correctCount || 0),
+            totalQuestions: Number(data.totalQuestions || 1),
+            totalTimeSeconds: Number(data.totalTimeSeconds || 0),
+            maxStreak: Number(data.maxStreak || 0),
+            answers: Array.isArray(data.answers) ? data.answers : [],
+            passed: typeof data.passed === 'boolean' ? data.passed : undefined
+          } as QuizAttempt;
+        })
+        .sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      setAttempts(listAttempts);
+      setAllAttemptsLoaded(true);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.LIST, 'attempts');
+    } finally {
+      setIsLoadingAllAttempts(false);
     }
   };
 
@@ -307,11 +390,51 @@ export default function App() {
     };
   }, [firebaseUser, profileReady]);
 
+  const currentPlayerRole = players.find(p => p.id === firebaseUser?.uid)?.role;
+  useEffect(() => {
+    if (!firebaseUser || !profileReady) return;
+    if (currentPlayerRole !== 'coach' || activeTab !== 'coach' || allUserDetailsLoaded) return;
+    let cancelled = false;
+    const validIds = new Set(players.map(p => p.id));
+    fetchAllUserDetailsDeltaOrCold()
+      .then(syncResult => {
+        if (cancelled) return;
+        const merged = mergeAggregateEntriesWithDelta(
+          syncResult.cachedEntries,
+          syncResult.fetchedEntries,
+          validIds.size > 0 ? validIds : null
+        );
+        setUserDetailsMap(prev => {
+          const next = new Map(prev);
+          merged.forEach(item => next.set(item.userId, item));
+          return next;
+        });
+        if (
+          !syncResult.isDelta ||
+          syncResult.fetchedEntries.length > 0 ||
+          merged.length !== syncResult.cachedEntries.length
+        ) {
+          writeAggregatesCache(USER_DETAILS_CACHE_KEY, {
+            version: 1,
+            lastSyncedCursor: syncResult.nextCursor,
+            entries: merged
+          });
+        }
+        setAllUserDetailsLoaded(true);
+      })
+      .catch(err => {
+        console.warn('Could not load aggregated user details:', err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [firebaseUser, profileReady, currentPlayerRole, activeTab, allUserDetailsLoaded, players]);
+
   const currentWeekKey = getWeekKey();
   const medalsByPlayer = useMemo(() => {
     const validIds = new Set(players.map(p => p.id));
-    return calculatePlayerMedals(attempts, currentWeekKey, validIds);
-  }, [attempts, currentWeekKey, players]);
+    return calculatePlayerMedals(attempts, currentWeekKey, validIds, userStatsMap);
+  }, [attempts, currentWeekKey, players, userStatsMap]);
 
   if (!authReady || (firebaseUser && !profileReady)) {
     return (
@@ -406,7 +529,24 @@ export default function App() {
     setLatestAttempt(normalizedAttempt);
     setIsQuizActive(false);
     setIsResultsOpen(true);
-    await saveAttemptToFirestore(normalizedAttempt);
+    const updatedAggregates = await saveAttemptToFirestore(normalizedAttempt);
+    if (updatedAggregates) {
+      setUserStatsMap(prev => {
+        const next = new Map(prev);
+        next.set(firebaseUser.uid, updatedAggregates.stats);
+        return next;
+      });
+      setUserDetailsMap(prev => {
+        const next = new Map(prev);
+        next.set(firebaseUser.uid, updatedAggregates.details);
+        return next;
+      });
+      upsertAggregateEntriesInCache(USER_STATS_CACHE_KEY, [updatedAggregates.stats]);
+      upsertAggregateEntriesInCache(USER_DETAILS_CACHE_KEY, [updatedAggregates.details]);
+    }
+    if (allAttemptsLoaded) {
+      setAttempts(prev => [normalizedAttempt, ...prev]);
+    }
   };
 
   const managedLabels =
@@ -420,22 +560,52 @@ export default function App() {
     const exists = questions.some(q => q.id === updated.id);
     await saveQuestionToFirestore(updated, exists, firebaseUser.uid);
 
+    const nextQuestion: Question = {
+      ...updated,
+      updatedAt: updated.updatedAt || new Date().toISOString()
+    };
+    setQuestions(prev => mergeQuestionsWithDelta(prev, [nextQuestion]));
+    upsertQuestionsInCache(QUESTIONS_CACHE_KEY, [nextQuestion]);
+
     const newLabels = updated.tags.filter(t => !managedLabels.includes(t));
     if (newLabels.length > 0 && isCoach) {
-      await saveQuizConfigToFirestore({
+      const nextConfig: QuizConfig = {
         ...quizConfig,
         topicLabels: Array.from(new Set([...managedLabels, ...newLabels]))
-      });
+      };
+      setQuizConfig(nextConfig);
+      await saveQuizConfigToFirestore(nextConfig);
     }
   };
 
   const handleRemoveTopicLabel = async (tag: string) => {
     if (!isCoach) return;
     await removeTopicLabelFromFirestore(tag, allKnownTags, questions, quizConfig, teams);
+
+    const nowIso = new Date().toISOString();
+    const affectedQuestions = questions
+      .filter(q => q.tags.includes(tag))
+      .map(q => ({
+        ...q,
+        tags: q.tags.filter(t => t !== tag),
+        updatedAt: nowIso
+      }));
+    if (affectedQuestions.length > 0) {
+      setQuestions(prev => mergeQuestionsWithDelta(prev, affectedQuestions));
+      upsertQuestionsInCache(QUESTIONS_CACHE_KEY, affectedQuestions);
+    }
+    setQuizConfig(prev => ({
+      ...prev,
+      topicLabels: allKnownTags.filter(t => t !== tag),
+      selectedTags: prev.selectedTags?.filter(t => t !== tag)
+    }));
   };
 
   const handleDeleteQuestion = async (questionId: string) => {
-    await deleteQuestionFromFirestore(questionId);
+    const nextDeletedIds = await deleteQuestionFromFirestore(questionId, quizConfig);
+    setQuizConfig(prev => ({ ...prev, deletedQuestionIds: nextDeletedIds }));
+    setQuestions(prev => prev.filter(q => q.id !== questionId));
+    removeQuestionFromCache(QUESTIONS_CACHE_KEY, questionId);
   };
 
   const handleDuplicateQuestion = (q: Question) => {
@@ -452,7 +622,16 @@ export default function App() {
   const handleTogglePriorityFocus = async (questionId: string) => {
     const target = questions.find(q => q.id === questionId);
     if (!target) return;
-    await toggleQuestionPriorityInFirestore(questionId, !target.isPriorityFocus);
+    const nextFocus = !target.isPriorityFocus;
+    await toggleQuestionPriorityInFirestore(questionId, nextFocus);
+
+    const nextQuestion: Question = {
+      ...target,
+      isPriorityFocus: nextFocus,
+      updatedAt: new Date().toISOString()
+    };
+    setQuestions(prev => mergeQuestionsWithDelta(prev, [nextQuestion]));
+    upsertQuestionsInCache(QUESTIONS_CACHE_KEY, [nextQuestion]);
   };
 
   const openConfigModalForTeam = (team: Team | null) => {
@@ -497,8 +676,37 @@ export default function App() {
   const handleDeletePlayer = async (target: Player) => {
     if (!isCoach || target.id === firebaseUser.uid) return;
     await deletePlayerFromFirestore(target, attempts, firebaseUser.uid, teams);
+    setPlayers(prev => prev.filter(p => p.id !== target.id));
+    setUserStatsMap(prev => {
+      const next = new Map(prev);
+      next.delete(target.id);
+      return next;
+    });
+    setUserDetailsMap(prev => {
+      const next = new Map(prev);
+      next.delete(target.id);
+      return next;
+    });
+    removeAggregateEntryFromCache<UserStats>(USER_STATS_CACHE_KEY, target.id);
+    removeAggregateEntryFromCache<UserDetails>(USER_DETAILS_CACHE_KEY, target.id);
     setIsPlayerDetailOpen(false);
     setSelectedPlayerForDetail(null);
+  };
+
+  const handleRunAdminMigration = async () => {
+    if (!currentPlayer.isAdmin) {
+      throw new Error('Nur Admins können diese Migration ausführen.');
+    }
+    const result = await migrateAllUserAggregatesInFirestore(players);
+    setUserStatsMap(result.statsMap);
+    setUserDetailsMap(result.detailsMap);
+    setAllUserDetailsLoaded(true);
+    upsertAggregateEntriesInCache(USER_STATS_CACHE_KEY, Array.from(result.statsMap.values()));
+    upsertAggregateEntriesInCache(USER_DETAILS_CACHE_KEY, Array.from(result.detailsMap.values()));
+    return {
+      updatedPlayersCount: result.updatedPlayersCount,
+      processedAttemptsCount: result.processedAttemptsCount
+    };
   };
 
   const effectiveTab: TabType = activeTab === 'coach' && !isCoach ? 'quiz' : activeTab;
@@ -588,6 +796,7 @@ export default function App() {
             questionCount={effectivePlayerQuestions.length}
             isCoach={isCoach}
             medalsByPlayer={medalsByPlayer}
+            userStatsMap={userStatsMap}
             nowMs={nowMs}
             onStartQuiz={handleStartQuiz}
             onOpenConfig={() => openConfigModalForTeam(activePlayerTeam)}
@@ -672,56 +881,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Temporary one-click migration banner */}
-            {(() => {
-              const pendingCount = attempts.filter(a => a.teamId !== MIGRATION_TARGET_TEAM_ID).length;
-              const targetTeam = teams.find(t => t.id === MIGRATION_TARGET_TEAM_ID);
-              return (
-                <div className="bg-amber-950/35 border border-amber-700/60 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="space-y-0.5 min-w-0">
-                    <p className="text-xs font-semibold text-amber-200">
-                      Einmalige Daten-Migration → {targetTeam ? `${targetTeam.name} (${MIGRATION_TARGET_TEAM_ID})` : MIGRATION_TARGET_TEAM_ID}
-                    </p>
-                    <p className="text-[11px] text-amber-100/80 tabular-nums">
-                      {!targetTeam
-                        ? `Team ${MIGRATION_TARGET_TEAM_ID} nicht gefunden.`
-                        : pendingCount > 0
-                        ? `${pendingCount} von ${attempts.length} Versuchen werden diesem Team zugeordnet.`
-                        : `Alle ${attempts.length} Versuche sind bereits diesem Team zugeordnet.`}
-                    </p>
-                    {migrationMessage && (
-                      <p className="text-[11px] font-medium text-emerald-300 pt-0.5">
-                        {migrationMessage}
-                      </p>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    disabled={isMigratingAttempts || !targetTeam || pendingCount === 0}
-                    onClick={async () => {
-                      setIsMigratingAttempts(true);
-                      setMigrationMessage(null);
-                      try {
-                        const updatedCount = await migrateAllAttemptsToTeam(MIGRATION_TARGET_TEAM_ID);
-                        setMigrationMessage(`${updatedCount} Versuche erfolgreich migriert.`);
-                      } catch {
-                        setMigrationMessage('Migration fehlgeschlagen. Bitte prüfen.');
-                      } finally {
-                        setIsMigratingAttempts(false);
-                      }
-                    }}
-                    className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-black font-semibold text-xs shrink-0 min-h-[38px] transition-colors"
-                  >
-                    {isMigratingAttempts
-                      ? 'Migriere...'
-                      : pendingCount === 0
-                      ? 'Bereits migriert'
-                      : `Versuche migrieren (${pendingCount})`}
-                  </button>
-                </div>
-              );
-            })()}
-
             {coachSubTab === 'analytics' ? (
               <CoachAnalyticsView
                 players={players}
@@ -729,27 +888,19 @@ export default function App() {
                 attempts={attempts}
                 teams={teams}
                 medalsByPlayer={medalsByPlayer}
+                userStatsMap={userStatsMap}
+                userDetailsMap={userDetailsMap}
                 nowMs={nowMs}
                 selectedTeamId={coachAnalyticsTeamFilter}
                 onSelectTeamId={setCoachAnalyticsTeamFilter}
                 onOpenTeamConfig={team => openConfigModalForTeam(team)}
                 onTogglePriorityFocus={handleTogglePriorityFocus}
                 onSelectPlayerDetail={handleSelectPlayerDetail}
-                isMigratingStats={isMigratingStats}
-                statsMigrationMessage={statsMigrationMessage}
-                onMigrateStats={async () => {
-                  setIsMigratingStats(true);
-                  setStatsMigrationMessage(null);
-                  try {
-                    const migratedCount = await migrateAllUserStatsToFirestore(players, attempts);
-                    setStatsMigrationMessage(`${migratedCount} Spieler-Statistiken erfolgreich migriert.`);
-                    void loadAppData();
-                  } catch {
-                    setStatsMigrationMessage('Statistik-Migration fehlgeschlagen.');
-                  } finally {
-                    setIsMigratingStats(false);
-                  }
-                }}
+                onLoadAllAttempts={handleLoadAllAttempts}
+                isLoadingAllAttempts={isLoadingAllAttempts}
+                allAttemptsLoaded={allAttemptsLoaded}
+                isAdmin={Boolean(currentPlayer.isAdmin)}
+                onRunAdminMigration={handleRunAdminMigration}
               />
             ) : coachSubTab === 'teams' ? (
               <CoachTeamsView
@@ -763,7 +914,25 @@ export default function App() {
                 onCreateTeam={name => createTeamInFirestore(name, firebaseUser.uid, quizConfig)}
                 onUpdateTeam={(teamId, updates) => updateTeamInFirestore(teamId, updates)}
                 onSetDefaultTeam={teamId => setDefaultTeamInFirestore(teamId, teams)}
-                onDeleteTeam={teamId => deleteTeamFromFirestore(teamId, questions)}
+                onDeleteTeam={async teamId => {
+                  await deleteTeamFromFirestore(teamId, questions);
+                  const nowIso = new Date().toISOString();
+                  const affected = questions
+                    .filter(q => q.teamIds && q.teamIds.includes(teamId))
+                    .map(q => {
+                      const nextTeamIds = q.teamIds!.filter(id => id !== teamId);
+                      return {
+                        ...q,
+                        teamIds: nextTeamIds.length > 0 ? nextTeamIds : undefined,
+                        updatedAt: nowIso
+                      };
+                    });
+                  if (affected.length > 0) {
+                    setQuestions(prev => mergeQuestionsWithDelta(prev, affected));
+                    upsertQuestionsInCache(QUESTIONS_CACHE_KEY, affected);
+                  }
+                  setTeams(prev => prev.filter(t => t.id !== teamId));
+                }}
                 onOpenTeamConfig={team => openConfigModalForTeam(team)}
                 onGoToTeamQuestions={teamId => {
                   setCoachQuestionsTeamFilter(teamId);
@@ -776,6 +945,7 @@ export default function App() {
                 teams={teams}
                 players={players}
                 attempts={attempts}
+                userDetailsMap={userDetailsMap}
                 selectedTeamFilter={coachQuestionsTeamFilter}
                 onChangeTeamFilter={setCoachQuestionsTeamFilter}
                 selectedPlayerFilter={coachQuestionsPlayerFilter}
@@ -861,6 +1031,16 @@ export default function App() {
         attempts={attempts}
         questions={questions}
         medals={selectedPlayerForDetail ? medalsByPlayer.get(selectedPlayerForDetail.id) : undefined}
+        cachedDetails={selectedPlayerForDetail ? userDetailsMap.get(selectedPlayerForDetail.id) ?? null : null}
+        playerStats={selectedPlayerForDetail ? userStatsMap.get(selectedPlayerForDetail.id) ?? null : null}
+        onDetailsLoaded={(userId, details) => {
+          setUserDetailsMap(prev => {
+            const next = new Map(prev);
+            next.set(userId, details);
+            return next;
+          });
+          upsertAggregateEntriesInCache(USER_DETAILS_CACHE_KEY, [details]);
+        }}
         nowMs={nowMs}
         isOpen={isPlayerDetailOpen}
         onClose={() => {
@@ -921,7 +1101,18 @@ export default function App() {
           setIsProfileOpen(false);
           await signOutUser();
         }}
+        onRunAdminMigration={currentPlayer.isAdmin ? handleRunAdminMigration : undefined}
       />
+
+      {/* Admin Document Reads Telemetry Widget (Bottom-Left) */}
+      {currentPlayer.isAdmin && (
+        <div className="fixed bottom-4 left-4 z-50 px-3.5 py-2 bg-black/90 border border-zinc-700/80 rounded-xl text-xs font-mono text-emerald-400 shadow-2xl backdrop-blur-md flex items-center gap-2.5">
+          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+          <span>
+            Firestore Reads: <strong className="text-white tabular-nums font-bold">{documentReadCount}</strong>
+          </span>
+        </div>
+      )}
     </div>
   );
 }

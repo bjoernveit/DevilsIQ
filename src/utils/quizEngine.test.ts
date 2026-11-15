@@ -16,9 +16,13 @@ import {
   calculateQuestionStats,
   getOptionDisplayText,
   ONLINE_WINDOW_MS,
-  isPlayerOnline
+  isPlayerOnline,
+  buildUserStatsFromAttempts,
+  buildUserDetailsFromAttempts,
+  calculateTacticalGapsFromQuestionStats,
+  aggregateQuestionStatsFromUserDetails
 } from './quizEngine';
-import { Question, QuizConfig, QuizAttempt, Player, Team } from '../types/basketball';
+import { Question, QuizConfig, QuizAttempt, Player, Team, UserDetails } from '../types/basketball';
 
 const dummyQuestions: Question[] = [
   {
@@ -761,4 +765,278 @@ test('isPlayerOnline returns true only when a round was started within the last 
   assert.equal(isPlayerOnline(new Date(nowMs - 300_000).toISOString(), nowMs), false);
 });
 
+test('calculateWeeklyLeaderboard and calculateAllTimeLeaderboard read attempt counts and scores from userStatsMap when attempts are unloaded', () => {
+  const players: Player[] = [
+    { id: 'p1', name: 'Luka', avatarColor: '#111' },
+    { id: 'p2', name: 'Franz', avatarColor: '#222' },
+    { id: 'p3', name: 'Dennis', avatarColor: '#333' }
+  ];
 
+  const userStatsMap = new Map([
+    [
+      'p1',
+      {
+        userId: 'p1',
+        currentStreak: 3,
+        bestStreak: 5,
+        totalAttemptsAllTime: 14,
+        attemptsThisWeek: 4,
+        currentWeekKey: '2026-W46',
+        bestScoreThisWeek: 18.4,
+        bestScoreAllTime: 12.7
+      }
+    ],
+    [
+      'p2',
+      {
+        userId: 'p2',
+        currentStreak: 0,
+        bestStreak: 2,
+        totalAttemptsAllTime: 7,
+        attemptsThisWeek: 2,
+        currentWeekKey: '2026-W46',
+        bestScoreThisWeek: 0,
+        bestScoreAllTime: 15.1
+      }
+    ],
+    [
+      'p3',
+      {
+        userId: 'p3',
+        currentStreak: 1,
+        bestStreak: 1,
+        totalAttemptsAllTime: 3,
+        attemptsThisWeek: 5,
+        currentWeekKey: '2026-W45', // stale week
+        bestScoreThisWeek: 11.2,
+        bestScoreAllTime: 11.2
+      }
+    ]
+  ]);
+
+  const weekly = calculateWeeklyLeaderboard(players, [], '2026-W46', userStatsMap);
+  const p1Weekly = weekly.find(w => w.player.id === 'p1')!;
+  const p2Weekly = weekly.find(w => w.player.id === 'p2')!;
+  const p3Weekly = weekly.find(w => w.player.id === 'p3')!;
+
+  assert.equal(p1Weekly.hasCompletedThisWeek, true);
+  assert.equal(p1Weekly.attemptsThisWeek, 4);
+  assert.equal(p1Weekly.totalAttemptsAllTime, 14);
+  assert.equal(p1Weekly.bestScoreThisWeek, 18.4);
+
+  assert.equal(p2Weekly.hasCompletedThisWeek, false);
+  assert.equal(p2Weekly.attemptsThisWeek, 2);
+  assert.equal(p2Weekly.totalAttemptsAllTime, 7);
+
+  // p3 stats are from W45 -> should not count as W46 completion or attempts
+  assert.equal(p3Weekly.hasCompletedThisWeek, false);
+  assert.equal(p3Weekly.attemptsThisWeek, 0);
+  assert.equal(p3Weekly.totalAttemptsAllTime, 3);
+  assert.equal(p3Weekly.bestScoreThisWeek, 0);
+
+  const allTime = calculateAllTimeLeaderboard(players, [], userStatsMap);
+  assert.equal(allTime[0].player.id, 'p3'); // 11.2s best all time
+  assert.equal(allTime[0].totalAttemptsAllTime, 3);
+  assert.equal(allTime[0].bestScoreThisWeek, 11.2);
+  assert.equal(allTime.find(a => a.player.id === 'p1')!.totalAttemptsAllTime, 14);
+  assert.equal(allTime.find(a => a.player.id === 'p1')!.bestScoreThisWeek, 12.7);
+  assert.equal(allTime.find(a => a.player.id === 'p2')!.totalAttemptsAllTime, 7);
+  assert.equal(allTime.find(a => a.player.id === 'p2')!.bestScoreThisWeek, 15.1);
+
+  const medals = calculatePlayerMedals([], '2026-W46', new Set(['p1', 'p2', 'p3']), userStatsMap);
+  assert.deepEqual(medals.get('p1'), { gold: 1, silver: 0, bronze: 0 });
+  assert.equal(medals.get('p3'), undefined);
+});
+
+test('buildUserStatsFromAttempts and buildUserDetailsFromAttempts precalculate all detail metrics and match tactical gaps', () => {
+  const attempts: QuizAttempt[] = [
+    {
+      id: 'a1',
+      playerId: 'p1',
+      timestamp: '2026-11-01T10:00:00Z',
+      weekKey: '2026-W45',
+      totalScore: 22.0,
+      correctCount: 2,
+      totalQuestions: 2,
+      totalTimeSeconds: 22.0,
+      maxStreak: 2,
+      passed: true,
+      answers: [
+        { questionId: 'q1', selectedOptionId: 'opt1', isCorrect: true, timeSpentSeconds: 10.0, pointsEarned: 100 },
+        { questionId: 'q2', selectedOptionId: 'opt3', isCorrect: true, timeSpentSeconds: 12.0, pointsEarned: 100 }
+      ]
+    },
+    {
+      id: 'a2',
+      playerId: 'p1',
+      timestamp: '2026-11-08T10:00:00Z',
+      weekKey: '2026-W46',
+      totalScore: 15.0,
+      correctCount: 1,
+      totalQuestions: 2,
+      totalTimeSeconds: 15.0,
+      maxStreak: 1,
+      passed: false,
+      answers: [
+        { questionId: 'q1', selectedOptionId: 'opt2', isCorrect: false, timeSpentSeconds: 5.0, pointsEarned: 0 },
+        { questionId: 'q2', selectedOptionId: 'opt3', isCorrect: true, timeSpentSeconds: 10.0, pointsEarned: 100 }
+      ]
+    },
+    {
+      id: 'a3',
+      playerId: 'p1',
+      timestamp: '2026-11-09T10:00:00Z',
+      weekKey: '2026-W46',
+      totalScore: 14.0,
+      correctCount: 2,
+      totalQuestions: 2,
+      totalTimeSeconds: 14.0,
+      maxStreak: 2,
+      passed: true,
+      answers: [
+        { questionId: 'q1', selectedOptionId: 'opt1', isCorrect: true, timeSpentSeconds: 6.0, pointsEarned: 100 },
+        { questionId: 'q2', selectedOptionId: 'opt3', isCorrect: true, timeSpentSeconds: 8.0, pointsEarned: 100 }
+      ]
+    },
+    {
+      id: 'other-player',
+      playerId: 'p2',
+      timestamp: '2026-11-09T11:00:00Z',
+      weekKey: '2026-W46',
+      totalScore: 10.0,
+      correctCount: 2,
+      totalQuestions: 2,
+      totalTimeSeconds: 10.0,
+      maxStreak: 2,
+      passed: true,
+      answers: []
+    }
+  ];
+
+  const stats = buildUserStatsFromAttempts('p1', attempts, '2026-W46');
+  assert.equal(stats.totalAttemptsAllTime, 3);
+  assert.equal(stats.attemptsThisWeek, 2);
+  assert.equal(stats.currentWeekKey, '2026-W46');
+  assert.equal(stats.bestScoreThisWeek, 14.0);
+  assert.equal(stats.bestScoreAllTime, 14.0);
+  assert.equal(stats.currentStreak, 1);
+  assert.equal(stats.bestStreak, 1);
+
+  const details = buildUserDetailsFromAttempts('p1', attempts, '2026-W46');
+  assert.equal(details.totalAttempts, 3);
+  assert.equal(details.passedAttempts, 2);
+  assert.equal(details.bestTimeAllTime, 14.0);
+  assert.equal(details.averagePassedTime, 18.0); // (22 + 14) / 2
+  assert.equal(details.overallAvgQuestionTime, 8.5); // (10+12+5+10+6+8)/6 = 51/6 = 8.5
+  assert.equal(details.thisWeekPassed, true);
+  assert.equal(details.weeklyTrends.length, 2);
+  assert.equal(details.recentAttempts.length, 3);
+  assert.equal(details.recentAttempts[0].id, 'a3'); // newest first
+
+  const directGaps = calculateTacticalGaps(dummyQuestions, attempts, 'p1');
+  const precalcGaps = calculateTacticalGapsFromQuestionStats(dummyQuestions, details.questionStats);
+  assert.deepEqual(precalcGaps, directGaps);
+});
+
+test('aggregateQuestionStatsFromUserDetails aggregates per-question stats across players and respects filters', () => {
+  const p1Details: UserDetails = {
+    userId: 'p1',
+    totalAttempts: 2,
+    passedAttempts: 1,
+    bestTimeAllTime: 14.0,
+    averagePassedTime: 14.0,
+    overallAvgQuestionTime: 6.0,
+    thisWeekPassed: true,
+    currentWeekKey: '2026-W46',
+    currentStreak: 1,
+    bestStreak: 1,
+    weeklyTrends: [],
+    recentAttempts: [],
+    questionStats: [
+      {
+        questionId: 'q1',
+        total: 2,
+        correct: 1,
+        wrong: 1,
+        accuracy: 50,
+        timedCount: 2,
+        totalTimeSeconds: 10.0,
+        averageTimeSeconds: 5.0,
+        lastIsCorrect: false,
+        lastAttemptTimestamp: '2026-11-08T10:00:00Z'
+      },
+      {
+        questionId: 'q2',
+        total: 1,
+        correct: 1,
+        wrong: 0,
+        accuracy: 100,
+        timedCount: 1,
+        totalTimeSeconds: 8.0,
+        averageTimeSeconds: 8.0,
+        lastIsCorrect: true,
+        lastAttemptTimestamp: '2026-11-08T10:00:00Z'
+      }
+    ]
+  };
+
+  const p2Details: UserDetails = {
+    userId: 'p2',
+    totalAttempts: 1,
+    passedAttempts: 1,
+    bestTimeAllTime: 10.0,
+    averagePassedTime: 10.0,
+    overallAvgQuestionTime: 4.5,
+    thisWeekPassed: true,
+    currentWeekKey: '2026-W46',
+    currentStreak: 1,
+    bestStreak: 1,
+    weeklyTrends: [],
+    recentAttempts: [],
+    questionStats: [
+      {
+        questionId: 'q1',
+        total: 2,
+        correct: 2,
+        wrong: 0,
+        accuracy: 100,
+        timedCount: 2,
+        totalTimeSeconds: 7.0,
+        averageTimeSeconds: 3.5,
+        lastIsCorrect: true,
+        lastAttemptTimestamp: '2026-11-09T12:00:00Z'
+      }
+    ]
+  };
+
+  const allStats = aggregateQuestionStatsFromUserDetails([p1Details, p2Details]);
+  const q1All = allStats.get('q1')!;
+  assert.equal(q1All.total, 4);
+  assert.equal(q1All.correct, 3);
+  assert.equal(q1All.wrong, 1);
+  assert.equal(q1All.accuracy, 75);
+  // (10.0 + 7.0) / 4 = 4.25 -> 4.3s
+  assert.equal(q1All.averageTimeSeconds, 4.3);
+  // Latest timestamp is p2 on 2026-11-09
+  assert.equal(q1All.lastIsCorrect, true);
+  assert.equal(q1All.lastAttemptTimestamp, '2026-11-09T12:00:00Z');
+  assert.equal(allStats.get('q2')?.total, 1);
+
+  // Filter to specific player p1
+  const p1Only = aggregateQuestionStatsFromUserDetails([p1Details, p2Details], {
+    playerIdFilter: 'p1'
+  });
+  assert.equal(p1Only.get('q1')?.total, 2);
+  assert.equal(p1Only.get('q1')?.correct, 1);
+  assert.equal(p1Only.get('q1')?.accuracy, 50);
+  assert.equal(p1Only.get('q1')?.lastIsCorrect, false);
+
+  // Filter by teamPlayerIds when playerIdFilter is 'all'
+  const teamOnly = aggregateQuestionStatsFromUserDetails([p1Details, p2Details], {
+    playerIdFilter: 'all',
+    teamPlayerIds: new Set(['p2'])
+  });
+  assert.equal(teamOnly.get('q1')?.total, 2);
+  assert.equal(teamOnly.get('q1')?.correct, 2);
+  assert.equal(teamOnly.get('q2'), undefined);
+});

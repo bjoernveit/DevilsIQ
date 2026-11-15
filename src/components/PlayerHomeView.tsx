@@ -1,5 +1,4 @@
-import React from 'react';
-import { Player, QuizAttempt, QuizConfig, Team } from '../types/basketball';
+import { Player, QuizAttempt, QuizConfig, Team, UserStats } from '../types/basketball';
 import { calculateWeeklyLeaderboard, getWeekKey, isPlayerOnline, PlayerMedals } from '../utils/quizEngine';
 import { LeaderboardView } from './LeaderboardView';
 import { PlayerLabel } from './PlayerLabel';
@@ -17,6 +16,7 @@ interface PlayerHomeViewProps {
   questionCount: number;
   isCoach: boolean;
   medalsByPlayer?: Map<string, PlayerMedals>;
+  userStatsMap?: Map<string, UserStats>;
   nowMs?: number;
   onStartQuiz: () => void;
   onOpenConfig: () => void;
@@ -37,6 +37,7 @@ export const PlayerHomeView: React.FC<PlayerHomeViewProps> = ({
   questionCount,
   isCoach,
   medalsByPlayer,
+  userStatsMap,
   nowMs = Date.now(),
   onStartQuiz,
   onOpenConfig,
@@ -49,7 +50,7 @@ export const PlayerHomeView: React.FC<PlayerHomeViewProps> = ({
     ? attempts.filter(a => a.teamId === activeTeam.id)
     : [];
 
-  const leaderboard = calculateWeeklyLeaderboard([player], scopedAttempts, currentWeek);
+  const leaderboard = calculateWeeklyLeaderboard([player], scopedAttempts, currentWeek, userStatsMap);
   const mySummary = leaderboard[0];
 
   const hasCompleted = mySummary?.hasCompletedThisWeek ?? false;
@@ -138,6 +139,8 @@ export const PlayerHomeView: React.FC<PlayerHomeViewProps> = ({
                 <p className="text-xs text-zinc-400">
                   {hasCompleted
                     ? `${attemptsThisWeek} ${attemptsThisWeek === 1 ? 'Versuch' : 'Versuche'} diese Woche`
+                    : attemptsThisWeek > 0
+                    ? `${attemptsThisWeek} ${attemptsThisWeek === 1 ? 'Versuch' : 'Versuche'} diese Woche · Noch nicht bestanden`
                     : 'Mindestens einmal diese Woche abschließen'}
                 </p>
               </div>
@@ -208,6 +211,7 @@ export const PlayerHomeView: React.FC<PlayerHomeViewProps> = ({
           activeTeam={activeTeam}
           teams={teams}
           medalsByPlayer={medalsByPlayer}
+          userStatsMap={userStatsMap}
           nowMs={nowMs}
           onSelectPlayerDetail={onSelectPlayerDetail}
           viewerIsCoach={isCoach}

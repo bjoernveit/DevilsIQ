@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
-import { Player, Question, QuizAttempt, Team } from '../types/basketball';
+import { Player, Question, QuizAttempt, Team, UserStats, UserDetails } from '../types/basketball';
 import {
   calculateTacticalGaps,
+  calculateTacticalGapsFromQuestionStats,
+  aggregateQuestionStatsFromUserDetails,
   calculateWeeklyLeaderboard,
   calculateWeeklyTrends,
   filterQuestionsForTeam,
@@ -19,7 +21,8 @@ import {
   ChevronRight,
   Copy,
   Check,
-  SlidersHorizontal
+  SlidersHorizontal,
+  Database
 } from 'lucide-react';
 
 interface CoachAnalyticsViewProps {
@@ -28,15 +31,19 @@ interface CoachAnalyticsViewProps {
   attempts: QuizAttempt[];
   teams: Team[];
   medalsByPlayer?: Map<string, PlayerMedals>;
+  userStatsMap?: Map<string, UserStats>;
+  userDetailsMap?: Map<string, UserDetails>;
   nowMs?: number;
   selectedTeamId: string;
   onSelectTeamId: (teamId: string) => void;
   onOpenTeamConfig?: (team: Team) => void;
   onTogglePriorityFocus: (questionId: string) => void;
   onSelectPlayerDetail: (player: Player) => void;
-  isMigratingStats?: boolean;
-  statsMigrationMessage?: string | null;
-  onMigrateStats?: () => Promise<void>;
+  onLoadAllAttempts?: () => Promise<void>;
+  isLoadingAllAttempts?: boolean;
+  allAttemptsLoaded?: boolean;
+  isAdmin?: boolean;
+  onRunAdminMigration?: () => Promise<{ updatedPlayersCount: number; processedAttemptsCount: number }>;
 }
 
 export const CoachAnalyticsView: React.FC<CoachAnalyticsViewProps> = ({
@@ -45,15 +52,19 @@ export const CoachAnalyticsView: React.FC<CoachAnalyticsViewProps> = ({
   attempts,
   teams,
   medalsByPlayer,
+  userStatsMap,
+  userDetailsMap,
   nowMs = Date.now(),
   selectedTeamId,
   onSelectTeamId,
   onOpenTeamConfig,
   onTogglePriorityFocus,
   onSelectPlayerDetail,
-  isMigratingStats = false,
-  statsMigrationMessage = null,
-  onMigrateStats
+  onLoadAllAttempts,
+  isLoadingAllAttempts = false,
+  allAttemptsLoaded = false,
+  isAdmin = false,
+  onRunAdminMigration
 }) => {
   const currentWeek = getWeekKey();
   const activeTeam =
@@ -74,18 +85,62 @@ export const CoachAnalyticsView: React.FC<CoachAnalyticsViewProps> = ({
       )
     : attempts;
 
-  const gaps = calculateTacticalGaps(scopedQuestions, scopedAttempts);
-  const leaderboard = calculateWeeklyLeaderboard(scopedPlayers, scopedAttempts, currentWeek);
+  const usePrecalcDetails = scopedAttempts.length === 0 && Boolean(userDetailsMap && userDetailsMap.size > 0);
+  const aggregatedQStats = usePrecalcDetails
+    ? aggregateQuestionStatsFromUserDetails(Array.from(userDetailsMap!.values()), {
+        teamPlayerIds: activeTeam ? teamPlayerIdSet : null
+      })
+    : null;
+
+  const gaps = aggregatedQStats
+    ? calculateTacticalGapsFromQuestionStats(scopedQuestions, Array.from(aggregatedQStats.values()))
+    : calculateTacticalGaps(scopedQuestions, scopedAttempts);
+  const leaderboard = calculateWeeklyLeaderboard(scopedPlayers, scopedAttempts, currentWeek, userStatsMap);
   const weeklyTrends = calculateWeeklyTrends(scopedAttempts);
 
   const completedCount = leaderboard.filter(l => l.hasCompletedThisWeek).length;
+  const totalAttemptsDisplay =
+    scopedAttempts.length > 0
+      ? scopedAttempts.length
+      : leaderboard.reduce((sum, item) => sum + item.totalAttemptsAllTime, 0);
   const totalAnswers = scopedAttempts.flatMap(a => a.answers);
-  const overallAccuracy = totalAnswers.length > 0
+  const overallAccuracy = aggregatedQStats
+    ? (() => {
+        let total = 0;
+        let correct = 0;
+        aggregatedQStats.forEach(s => {
+          total += s.total;
+          correct += s.correct;
+        });
+        return total > 0 ? Math.round((correct / total) * 100) : 0;
+      })()
+    : totalAnswers.length > 0
     ? Math.round((totalAnswers.filter(a => a.isCorrect).length / totalAnswers.length) * 100)
     : 0;
 
   const [copiedInvite, setCopiedInvite] = useState(false);
+  const [isMigrating, setIsMigrating] = useState(false);
+  const [migrationResult, setMigrationResult] = useState<{
+    updatedPlayersCount: number;
+    processedAttemptsCount: number;
+  } | null>(null);
+  const [migrationError, setMigrationError] = useState<string | null>(null);
   const registrationUrl = getRegistrationUrl();
+
+  const handleAdminMigration = async () => {
+    if (!onRunAdminMigration || isMigrating) return;
+    setIsMigrating(true);
+    setMigrationError(null);
+    setMigrationResult(null);
+    try {
+      const res = await onRunAdminMigration();
+      setMigrationResult(res);
+    } catch (err) {
+      setMigrationError(err instanceof Error ? err.message : 'Migration fehlgeschlagen.');
+    } finally {
+      setIsMigrating(false);
+    }
+  };
 
   const handleCopyInvite = async () => {
     try {
@@ -99,6 +154,38 @@ export const CoachAnalyticsView: React.FC<CoachAnalyticsViewProps> = ({
 
   return (
     <div className="space-y-6">
+      {isAdmin && onRunAdminMigration && (
+        <div className="bg-zinc-900 border border-amber-800/60 rounded-2xl p-4 space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <Database className="w-4 h-4 text-amber-400 shrink-0" />
+                <p className="text-xs font-semibold text-white">Admin: Initiale Daten-Migration</p>
+              </div>
+              <p className="text-[11px] text-zinc-400 mt-0.5">
+                Berechnet <code className="text-zinc-300">user_stats</code> (inkl. Wochen- &amp; Gesamtversuche) und <code className="text-zinc-300">user_details</code> für alle Spieler einmalig aus allen vorhandenen Versuchen neu.
+              </p>
+            </div>
+            <button
+              type="button"
+              disabled={isMigrating}
+              onClick={handleAdminMigration}
+              className="px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-xs font-semibold text-black shrink-0 min-h-[38px] transition-colors"
+            >
+              {isMigrating ? 'Migriere Daten...' : 'Stats & Details migrieren'}
+            </button>
+          </div>
+          {migrationResult && (
+            <p className="text-[11px] text-emerald-400 font-medium">
+              Migration abgeschlossen: {migrationResult.updatedPlayersCount} Spieler-Profile aktualisiert ({migrationResult.processedAttemptsCount} Versuche verarbeitet).
+            </p>
+          )}
+          {migrationError && (
+            <p className="text-[11px] text-red-400 font-medium">{migrationError}</p>
+          )}
+        </div>
+      )}
+
       {/* Private Registration Link Card */}
       <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="min-w-0">
@@ -123,33 +210,22 @@ export const CoachAnalyticsView: React.FC<CoachAnalyticsViewProps> = ({
         </button>
       </div>
 
-      {/* One-time Statistics Migration Banner */}
-      {onMigrateStats && (
-        <div className="bg-emerald-950/35 border border-emerald-700/60 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="space-y-0.5 min-w-0">
-            <p className="text-xs font-semibold text-emerald-200">
-              Einmalige Statistik-Migration → <code className="font-mono">user_stats</code> Collection
-            </p>
-            <p className="text-[11px] text-emerald-100/80">
-              Berechnet und migriert Serien, Bestzeiten und Versuche für alle Spieler in die dedizierte Stats-Collection.
-            </p>
-            {statsMigrationMessage && (
-              <p className="text-[11px] font-medium text-emerald-300 pt-0.5">
-                {statsMigrationMessage}
-              </p>
-            )}
+      {!allAttemptsLoaded && onLoadAllAttempts && (
+        <div className="bg-zinc-900/80 border border-zinc-800 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-xs font-semibold text-zinc-200">Detail-Auswertung noch nicht geladen ({totalAttemptsDisplay} {totalAttemptsDisplay === 1 ? 'Versuch' : 'Versuche'} erfasst)</p>
+            <p className="text-[11px] text-zinc-400 mt-0.5">Zur Schonung der Firestore-Reads werden Themen-Lücken & Verlauf erst bei Bedarf geladen.</p>
           </div>
           <button
             type="button"
-            disabled={isMigratingStats}
-            onClick={onMigrateStats}
-            className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-black font-semibold text-xs shrink-0 min-h-[38px] transition-colors"
+            disabled={isLoadingAllAttempts}
+            onClick={onLoadAllAttempts}
+            className="px-3.5 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-xs font-semibold text-zinc-200 shrink-0 min-h-[38px] transition-colors"
           >
-            {isMigratingStats ? 'Migriere Stats...' : 'Statistiken migrieren'}
+            {isLoadingAllAttempts ? 'Lade Daten...' : 'Alle historischen Daten laden'}
           </button>
         </div>
       )}
-      {/* Team Filter Bar */}
       {teams.length > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
@@ -214,7 +290,7 @@ export const CoachAnalyticsView: React.FC<CoachAnalyticsViewProps> = ({
         <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4">
           <div className="text-xs text-zinc-400">Versuche gesamt</div>
           <div className="text-xl sm:text-2xl font-bold font-mono tabular-nums text-white mt-1">
-            {scopedAttempts.length}
+            {totalAttemptsDisplay}
           </div>
           <div className="text-[11px] text-zinc-500 mt-0.5">Durchgänge</div>
         </div>

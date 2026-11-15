@@ -208,6 +208,9 @@
         "topicLabels": {
           "type": "array"
         },
+        "deletedQuestionIds": {
+          "type": "array"
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time"
@@ -311,7 +314,18 @@
         "totalAttemptsAllTime": {
           "type": "integer"
         },
+        "attemptsThisWeek": {
+          "type": "integer"
+        },
+        "currentWeekKey": {
+          "type": "string",
+          "maxLength": 16,
+          "pattern": "^[0-9]{4}-W[0-9]{2}$"
+        },
         "bestScoreThisWeek": {
+          "type": "number"
+        },
+        "bestScoreAllTime": {
           "type": "number"
         },
         "updatedAt": {
@@ -320,6 +334,76 @@
         }
       },
       "required": ["userId", "currentStreak", "bestStreak", "totalAttemptsAllTime", "bestScoreThisWeek", "updatedAt"]
+    },
+    "UserDetails": {
+      "title": "UserDetails",
+      "description": "Precalculated player detail analytics, weekly trends, per-question stats, and recent attempts summary.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "totalAttempts": {
+          "type": "integer"
+        },
+        "passedAttempts": {
+          "type": "integer"
+        },
+        "bestTimeAllTime": {
+          "type": "number"
+        },
+        "averagePassedTime": {
+          "type": "number"
+        },
+        "overallAvgQuestionTime": {
+          "type": "number"
+        },
+        "currentStreak": {
+          "type": "integer"
+        },
+        "bestStreak": {
+          "type": "integer"
+        },
+        "currentWeekKey": {
+          "type": "string",
+          "maxLength": 16,
+          "pattern": "^[0-9]{4}-W[0-9]{2}$"
+        },
+        "thisWeekPassed": {
+          "type": "boolean"
+        },
+        "weeklyTrends": {
+          "type": "array"
+        },
+        "questionStats": {
+          "type": "array"
+        },
+        "recentAttempts": {
+          "type": "array"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "userId",
+        "totalAttempts",
+        "passedAttempts",
+        "bestTimeAllTime",
+        "averagePassedTime",
+        "overallAvgQuestionTime",
+        "currentStreak",
+        "bestStreak",
+        "currentWeekKey",
+        "thisWeekPassed",
+        "weeklyTrends",
+        "questionStats",
+        "recentAttempts",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -354,6 +438,10 @@
     "/user_stats/{userId}": {
       "schema": { "$ref": "#/entities/UserStats" },
       "description": "Aggregated quiz performance stats for each player."
+    },
+    "/user_details/{userId}": {
+      "schema": { "$ref": "#/entities/UserDetails" },
+      "description": "Precalculated player detail modal data stored in a single document per user."
     }
   }
 }

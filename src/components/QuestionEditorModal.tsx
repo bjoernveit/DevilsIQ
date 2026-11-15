@@ -144,6 +144,7 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
         ? `${trimmedPrompt.slice(0, 147)}...`
         : trimmedPrompt;
 
+    const nowIso = new Date().toISOString();
     const updated: Question = {
       id: question?.id || `q-${Date.now()}`,
       title: shortTitle,
@@ -155,7 +156,8 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
       explanation: coachNote.trim().slice(0, 1000),
       options: validatedOptions,
       imageUrl: imageUrl.trim() ? imageUrl.trim() : undefined,
-      createdAt: question?.createdAt || new Date().toISOString()
+      createdAt: question?.createdAt || nowIso,
+      updatedAt: nowIso
     };
 
     onSave(updated);

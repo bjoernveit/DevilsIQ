@@ -1,4 +1,17 @@
-import { Question, QuizConfig, QuizAttempt, Player, TacticalGapReport, Team } from '../types/basketball';
+import {
+  Question,
+  QuizConfig,
+  QuizAttempt,
+  Player,
+  TacticalGapReport,
+  Team,
+  UserStats,
+  UserDetails,
+  UserDetailsQuestionStat,
+  UserDetailsRecentAttempt,
+  WeeklyTrendPoint
+} from '../types/basketball';
+export type { WeeklyTrendPoint };
 
 /**
  * Returns questions applicable to a specific team (team-specific + global "all teams" questions).
@@ -331,7 +344,8 @@ export interface PlayerMedals {
 export function calculatePlayerMedals(
   attempts: QuizAttempt[],
   currentWeekKey: string = getWeekKey(),
-  validPlayerIds?: Set<string>
+  validPlayerIds?: Set<string>,
+  userStatsMap?: Map<string, UserStats>
 ): Map<string, PlayerMedals> {
   const medalsByPlayer = new Map<string, PlayerMedals>();
   const passedByWeek = new Map<string, QuizAttempt[]>();
@@ -379,6 +393,25 @@ export function calculatePlayerMedals(
     }
   }
 
+  // Fallback: If attempts have not been loaded, calculate current week medals directly from userStatsMap
+  if (medalsByPlayer.size === 0 && userStatsMap && userStatsMap.size > 0) {
+    const validStats = Array.from(userStatsMap.entries())
+      .filter(([id, s]) => {
+        if (validPlayerIds && !validPlayerIds.has(id)) return false;
+        const weekMatches = s.currentWeekKey ? s.currentWeekKey === currentWeekKey : currentWeekKey === getWeekKey();
+        return weekMatches && s.bestScoreThisWeek > 0;
+      })
+      .sort(([, a], [, b]) => a.bestScoreThisWeek - b.bestScoreThisWeek);
+
+    const medalKeys: Array<keyof PlayerMedals> = ['gold', 'silver', 'bronze'];
+    for (let i = 0; i < Math.min(3, validStats.length); i++) {
+      const playerId = validStats[i][0];
+      const current = medalsByPlayer.get(playerId) || { gold: 0, silver: 0, bronze: 0 };
+      current[medalKeys[i]] += 1;
+      medalsByPlayer.set(playerId, current);
+    }
+  }
+
   return medalsByPlayer;
 }
 
@@ -400,20 +433,36 @@ export function getOptionDisplayText(text: string, hasImage: boolean): string {
 export function calculateWeeklyLeaderboard(
   players: Player[],
   attempts: QuizAttempt[],
-  targetWeekKey: string
+  targetWeekKey: string,
+  userStatsMap?: Map<string, UserStats>
 ): PlayerWeeklySummary[] {
   const bestTimestampMap = new Map<string, number>();
 
   const summaries = players.map(player => {
     const playerAttempts = attempts.filter(a => a.playerId === player.id);
     const thisWeekAttempts = playerAttempts.filter(a => a.weekKey === targetWeekKey);
+    const stats = userStatsMap?.get(player.id);
 
     const passedAttempts = thisWeekAttempts.filter(
       a => a.passed === true || a.correctCount === a.totalQuestions
     );
-    const hasCompletedThisWeek = passedAttempts.length > 0;
-    const attemptsThisWeek = thisWeekAttempts.length;
-    const totalAttemptsAllTime = playerAttempts.length;
+    const isStatsForTargetWeek = Boolean(
+      stats && (stats.currentWeekKey ? stats.currentWeekKey === targetWeekKey : targetWeekKey === getWeekKey())
+    );
+    const hasCompletedFromStats = Boolean(isStatsForTargetWeek && stats && stats.bestScoreThisWeek > 0);
+    const hasCompletedThisWeek = passedAttempts.length > 0 || hasCompletedFromStats;
+    const attemptsThisWeek =
+      thisWeekAttempts.length > 0
+        ? thisWeekAttempts.length
+        : isStatsForTargetWeek && stats
+        ? stats.attemptsThisWeek !== undefined
+          ? stats.attemptsThisWeek
+          : hasCompletedFromStats
+          ? 1
+          : 0
+        : 0;
+    const totalAttemptsAllTime =
+      playerAttempts.length > 0 ? playerAttempts.length : (stats?.totalAttemptsAllTime ?? 0);
 
     let bestScoreThisWeek = 0;
     let averageTimeThisWeek = 0;
@@ -431,6 +480,8 @@ export function calculateWeeklyLeaderboard(
           Math.min(...bestAttempts.map(a => new Date(a.timestamp).getTime()))
         );
       }
+    } else if (isStatsForTargetWeek && stats && stats.bestScoreThisWeek > 0) {
+      bestScoreThisWeek = Math.round(stats.bestScoreThisWeek * 10) / 10;
     }
 
     let totalPointsThisWeek = 0;
@@ -447,8 +498,8 @@ export function calculateWeeklyLeaderboard(
       ? Math.round((totalCorrectThisWeek / totalQuestionsThisWeek) * 100) 
       : 0;
 
-    const currentStreak = calculateCurrentErrorFreeStreak(playerAttempts);
-    const bestStreak = calculateBestErrorFreeStreak(playerAttempts);
+    const currentStreak = stats ? stats.currentStreak : calculateCurrentErrorFreeStreak(playerAttempts);
+    const bestStreak = stats ? stats.bestStreak : calculateBestErrorFreeStreak(playerAttempts);
     const seasonTotalScore = playerAttempts.reduce((acc, a) => acc + a.totalScore, 0);
 
     // Get latest attempt timestamp
@@ -495,16 +546,24 @@ export function calculateWeeklyLeaderboard(
  */
 export function calculateAllTimeLeaderboard(
   players: Player[],
-  attempts: QuizAttempt[]
+  attempts: QuizAttempt[],
+  userStatsMap?: Map<string, UserStats>
 ): PlayerWeeklySummary[] {
   return players.map(player => {
     const playerAttempts = attempts.filter(a => a.playerId === player.id);
+    const stats = userStatsMap?.get(player.id);
     const passedAttempts = playerAttempts.filter(
       a => a.passed === true || a.correctCount === a.totalQuestions
     );
-    const hasCompletedThisWeek = passedAttempts.length > 0;
-    const attemptsThisWeek = playerAttempts.length;
-    const totalAttemptsAllTime = playerAttempts.length;
+    const totalAttemptsAllTime =
+      playerAttempts.length > 0 ? playerAttempts.length : (stats?.totalAttemptsAllTime ?? 0);
+    const hasCompletedThisWeek =
+      passedAttempts.length > 0 ||
+      Boolean(
+        stats &&
+          ((stats.bestScoreAllTime ?? 0) > 0 || stats.bestScoreThisWeek > 0 || stats.bestStreak > 0)
+      );
+    const attemptsThisWeek = totalAttemptsAllTime;
 
     let bestScoreThisWeek = 0;
     let averageTimeThisWeek = 0;
@@ -512,6 +571,14 @@ export function calculateAllTimeLeaderboard(
       bestScoreThisWeek = Math.round(Math.min(...passedAttempts.map(a => a.totalTimeSeconds)) * 10) / 10;
       const totalPassedTime = passedAttempts.reduce((sum, a) => sum + a.totalTimeSeconds, 0);
       averageTimeThisWeek = Math.round((totalPassedTime / passedAttempts.length) * 10) / 10;
+    } else if (stats) {
+      const candidateBest =
+        stats.bestScoreAllTime && stats.bestScoreAllTime > 0
+          ? stats.bestScoreAllTime
+          : stats.bestScoreThisWeek > 0
+          ? stats.bestScoreThisWeek
+          : 0;
+      bestScoreThisWeek = Math.round(candidateBest * 10) / 10;
     }
 
     let totalPointsThisWeek = 0;
@@ -528,8 +595,8 @@ export function calculateAllTimeLeaderboard(
       ? Math.round((totalCorrectThisWeek / totalQuestionsThisWeek) * 100) 
       : 0;
 
-    const currentStreak = calculateCurrentErrorFreeStreak(playerAttempts);
-    const bestStreak = calculateBestErrorFreeStreak(playerAttempts);
+    const currentStreak = stats ? stats.currentStreak : calculateCurrentErrorFreeStreak(playerAttempts);
+    const bestStreak = stats ? stats.bestStreak : calculateBestErrorFreeStreak(playerAttempts);
     const seasonTotalScore = playerAttempts.reduce((acc, a) => acc + a.totalScore, 0);
 
     const sortedAttempts = [...playerAttempts].sort(
@@ -555,17 +622,14 @@ export function calculateAllTimeLeaderboard(
     if (a.hasCompletedThisWeek && !b.hasCompletedThisWeek) return -1;
     if (!a.hasCompletedThisWeek && b.hasCompletedThisWeek) return 1;
     if (a.hasCompletedThisWeek && b.hasCompletedThisWeek) {
-      return a.bestScoreThisWeek - b.bestScoreThisWeek;
+      if (a.bestScoreThisWeek > 0 && b.bestScoreThisWeek > 0 && a.bestScoreThisWeek !== b.bestScoreThisWeek) {
+        return a.bestScoreThisWeek - b.bestScoreThisWeek;
+      }
+      if (b.bestStreak !== a.bestStreak) return b.bestStreak - a.bestStreak;
+      return b.totalAttemptsAllTime - a.totalAttemptsAllTime;
     }
-    return b.attemptsThisWeek - a.attemptsThisWeek;
+    return b.totalAttemptsAllTime - a.totalAttemptsAllTime;
   });
-}
-
-export interface WeeklyTrendPoint {
-  weekKey: string;
-  attemptCount: number;
-  averageScore: number;
-  averageAccuracy: number;
 }
 
 /**
@@ -684,4 +748,285 @@ export function calculateQuestionStats(
 
   return map;
 }
+
+/**
+ * Builds aggregated UserStats for a player from their attempts.
+ */
+export function buildUserStatsFromAttempts(
+  playerId: string,
+  allPlayerAttempts: QuizAttempt[],
+  currentWeekKey: string = getWeekKey()
+): UserStats {
+  const playerAttempts = allPlayerAttempts.filter(a => a.playerId === playerId);
+  const thisWeekAttempts = playerAttempts.filter(a => a.weekKey === currentWeekKey);
+  const passedThisWeek = thisWeekAttempts.filter(
+    a => a.passed === true || a.correctCount === a.totalQuestions
+  );
+  const passedAllTime = playerAttempts.filter(
+    a => a.passed === true || a.correctCount === a.totalQuestions
+  );
+
+  const clampTime = (val: number) =>
+    Number.isFinite(val) ? Math.min(3600, Math.max(0, Math.round(val * 10) / 10)) : 0;
+
+  const bestScoreThisWeek =
+    passedThisWeek.length > 0
+      ? clampTime(Math.min(...passedThisWeek.map(a => a.totalTimeSeconds)))
+      : 0;
+  const bestScoreAllTime =
+    passedAllTime.length > 0
+      ? clampTime(Math.min(...passedAllTime.map(a => a.totalTimeSeconds)))
+      : 0;
+
+  return {
+    userId: playerId,
+    currentStreak: Math.min(1000, Math.max(0, Math.round(calculateCurrentErrorFreeStreak(playerAttempts)))),
+    bestStreak: Math.min(1000, Math.max(0, Math.round(calculateBestErrorFreeStreak(playerAttempts)))),
+    totalAttemptsAllTime: Math.min(10000, Math.max(0, Math.round(playerAttempts.length))),
+    attemptsThisWeek: Math.min(10000, Math.max(0, Math.round(thisWeekAttempts.length))),
+    currentWeekKey,
+    bestScoreThisWeek,
+    bestScoreAllTime
+  };
+}
+
+/**
+ * Builds precalculated UserDetails for a single-read PlayerDetailModal view.
+ */
+export function buildUserDetailsFromAttempts(
+  playerId: string,
+  allPlayerAttempts: QuizAttempt[],
+  currentWeekKey: string = getWeekKey()
+): UserDetails {
+  const playerAttempts = allPlayerAttempts.filter(a => a.playerId === playerId);
+  const passedList = playerAttempts.filter(
+    a => a.passed === true || a.correctCount === a.totalQuestions
+  );
+  const clampTime = (val: number) =>
+    Number.isFinite(val) ? Math.min(3600, Math.max(0, Math.round(val * 10) / 10)) : 0;
+
+  const bestTimeAllTime =
+    passedList.length > 0
+      ? clampTime(Math.min(...passedList.map(a => a.totalTimeSeconds)))
+      : 0;
+  const averagePassedTime =
+    passedList.length > 0
+      ? clampTime(
+          passedList.reduce((sum, a) => sum + (Number(a.totalTimeSeconds) || 0), 0) /
+            passedList.length
+        )
+      : 0;
+
+  let ansSum = 0;
+  let ansCount = 0;
+  for (const att of playerAttempts) {
+    for (const ans of att.answers) {
+      if (typeof ans.timeSpentSeconds === 'number' && ans.timeSpentSeconds > 0) {
+        ansSum += ans.timeSpentSeconds;
+        ansCount += 1;
+      }
+    }
+  }
+  const overallAvgQuestionTime = ansCount > 0 ? clampTime(ansSum / ansCount) : 0;
+
+  const thisWeekPassed = playerAttempts.some(
+    a => a.weekKey === currentWeekKey && (a.passed === true || a.correctCount === a.totalQuestions)
+  );
+
+  const weeklyTrends = calculateWeeklyTrends(playerAttempts)
+    .filter(w => Boolean(w.weekKey))
+    .slice(-300)
+    .map(w => ({
+      weekKey: w.weekKey,
+      attemptCount: Math.max(0, Math.round(w.attemptCount)),
+      averageScore: clampTime(w.averageScore),
+      averageAccuracy: Math.min(100, Math.max(0, Math.round(w.averageAccuracy)))
+    }));
+
+  const qStatsMap = calculateQuestionStats(playerAttempts);
+  const questionStats: UserDetailsQuestionStat[] = Array.from(qStatsMap.values())
+    .slice(0, 500)
+    .map(stat => ({
+      questionId: String(stat.questionId),
+      total: Math.max(0, Math.round(stat.total)),
+      correct: Math.max(0, Math.round(stat.correct)),
+      wrong: Math.max(0, Math.round(stat.wrong)),
+      accuracy: Math.min(100, Math.max(0, Math.round(stat.accuracy))),
+      timedCount: Math.max(0, Math.round(stat.timedCount)),
+      totalTimeSeconds: Math.max(0, Math.round(stat.totalTimeSeconds * 10) / 10),
+      averageTimeSeconds: clampTime(stat.averageTimeSeconds),
+      lastIsCorrect: Boolean(stat.lastIsCorrect),
+      lastAttemptTimestamp: String(stat.lastAttemptTimestamp || '')
+    }));
+
+  const recentAttempts: UserDetailsRecentAttempt[] = [...playerAttempts]
+    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+    .slice(0, 50)
+    .map(att => ({
+      id: String(att.id),
+      weekKey: String(att.weekKey || ''),
+      timestamp: String(att.timestamp || ''),
+      totalTimeSeconds: clampTime(att.totalTimeSeconds),
+      correctCount: Math.max(0, Math.round(att.correctCount || 0)),
+      totalQuestions: Math.max(1, Math.round(att.totalQuestions || 1)),
+      passed: att.passed === true || att.correctCount === att.totalQuestions
+    }));
+
+  return {
+    userId: playerId,
+    totalAttempts: Math.min(10000, Math.max(0, Math.round(playerAttempts.length))),
+    passedAttempts: Math.min(10000, Math.max(0, Math.round(passedList.length))),
+    bestTimeAllTime,
+    averagePassedTime,
+    overallAvgQuestionTime,
+    currentStreak: Math.min(1000, Math.max(0, Math.round(calculateCurrentErrorFreeStreak(playerAttempts)))),
+    bestStreak: Math.min(1000, Math.max(0, Math.round(calculateBestErrorFreeStreak(playerAttempts)))),
+    currentWeekKey,
+    thisWeekPassed,
+    weeklyTrends,
+    questionStats,
+    recentAttempts
+  };
+}
+
+/**
+ * Computes tactical topic gaps directly from precalculated per-question stats
+ * and the loaded question catalog (no raw attempts required).
+ */
+export function calculateTacticalGapsFromQuestionStats(
+  allQuestions: Question[],
+  questionStats: UserDetailsQuestionStat[]
+): TacticalGapReport[] {
+  const questionMap = new Map<string, Question>();
+  allQuestions.forEach(q => questionMap.set(q.id, q));
+
+  const tagStats = new Map<string, { total: number; correct: number; questionIds: Set<string> }>();
+  allQuestions.forEach(q => {
+    q.tags.forEach(tag => {
+      if (!tagStats.has(tag)) {
+        tagStats.set(tag, { total: 0, correct: 0, questionIds: new Set() });
+      }
+    });
+  });
+
+  for (const qStat of questionStats) {
+    const q = questionMap.get(qStat.questionId);
+    if (!q) continue;
+    for (const tag of q.tags) {
+      let stat = tagStats.get(tag);
+      if (!stat) {
+        stat = { total: 0, correct: 0, questionIds: new Set() };
+        tagStats.set(tag, stat);
+      }
+      stat.total += qStat.total;
+      stat.correct += qStat.correct;
+      stat.questionIds.add(q.id);
+    }
+  }
+
+  const reports: TacticalGapReport[] = [];
+  tagStats.forEach((stat, tag) => {
+    const accuracy = stat.total > 0 ? Math.round((stat.correct / stat.total) * 100) : 0;
+    let status: TacticalGapReport['status'] = 'solid';
+    if (stat.total === 0) {
+      status = 'needs_work';
+    } else if (accuracy < 60) {
+      status = 'critical_gap';
+    } else if (accuracy < 75) {
+      status = 'needs_work';
+    } else if (accuracy < 90) {
+      status = 'solid';
+    } else {
+      status = 'mastered';
+    }
+
+    reports.push({
+      tag,
+      totalAnswered: stat.total,
+      correctAnswered: stat.correct,
+      accuracyPercentage: accuracy,
+      status,
+      sampleQuestionIds: Array.from(stat.questionIds)
+    });
+  });
+
+  return reports.sort((a, b) => {
+    if (a.totalAnswered === 0 && b.totalAnswered > 0) return 1;
+    if (b.totalAnswered === 0 && a.totalAnswered > 0) return -1;
+    return a.accuracyPercentage - b.accuracyPercentage;
+  });
+}
+
+/**
+ * Aggregates per-question performance statistics across precalculated UserDetails documents,
+ * optionally filtered to a specific player or set of team player IDs.
+ */
+export function aggregateQuestionStatsFromUserDetails(
+  userDetailsList: UserDetails[],
+  options: {
+    playerIdFilter?: string;
+    teamPlayerIds?: Set<string> | null;
+  } = {}
+): Map<string, QuestionPerformanceStat> {
+  const map = new Map<string, QuestionPerformanceStat>();
+  const { playerIdFilter, teamPlayerIds } = options;
+
+  for (const details of userDetailsList) {
+    if (playerIdFilter && playerIdFilter !== 'all' && details.userId !== playerIdFilter) {
+      continue;
+    }
+    if (
+      (!playerIdFilter || playerIdFilter === 'all') &&
+      teamPlayerIds &&
+      !teamPlayerIds.has(details.userId)
+    ) {
+      continue;
+    }
+
+    for (const qStat of details.questionStats || []) {
+      const existing = map.get(qStat.questionId);
+      if (!existing) {
+        map.set(qStat.questionId, {
+          questionId: qStat.questionId,
+          total: qStat.total,
+          correct: qStat.correct,
+          wrong: qStat.wrong,
+          accuracy: qStat.accuracy,
+          timedCount: qStat.timedCount,
+          totalTimeSeconds: qStat.totalTimeSeconds,
+          averageTimeSeconds: qStat.averageTimeSeconds,
+          lastIsCorrect: qStat.lastIsCorrect,
+          lastAttemptTimestamp: qStat.lastAttemptTimestamp
+        });
+      } else {
+        existing.total += qStat.total;
+        existing.correct += qStat.correct;
+        existing.wrong += qStat.wrong;
+        existing.timedCount += qStat.timedCount;
+        existing.totalTimeSeconds += qStat.totalTimeSeconds;
+
+        const incomingTs = qStat.lastAttemptTimestamp
+          ? new Date(qStat.lastAttemptTimestamp).getTime()
+          : 0;
+        const existingTs = existing.lastAttemptTimestamp
+          ? new Date(existing.lastAttemptTimestamp).getTime()
+          : 0;
+        if (incomingTs >= existingTs) {
+          existing.lastIsCorrect = qStat.lastIsCorrect;
+          existing.lastAttemptTimestamp = qStat.lastAttemptTimestamp;
+        }
+      }
+    }
+  }
+
+  for (const cur of map.values()) {
+    cur.accuracy = cur.total > 0 ? Math.round((cur.correct / cur.total) * 100) : 0;
+    cur.averageTimeSeconds =
+      cur.timedCount > 0 ? Math.round((cur.totalTimeSeconds / cur.timedCount) * 10) / 10 : 0;
+  }
+
+  return map;
+}
+
+
 

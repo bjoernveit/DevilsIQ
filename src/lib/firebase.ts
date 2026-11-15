@@ -17,7 +17,6 @@ import {
   getDocFromServer,
   setDoc,
   updateDoc,
-  deleteDoc,
   deleteField,
   writeBatch,
   runTransaction,
@@ -31,18 +30,72 @@ import {
   QuizAttempt,
   QuizConfig,
   Team,
-  UserRole
+  UserRole,
+  UserStats,
+  UserDetails
 } from '../types/basketball';
 import { INITIAL_QUESTIONS, ALL_TAGS } from '../data/initialData';
 import {
-  calculateCurrentErrorFreeStreak,
-  calculateBestErrorFreeStreak,
-  getWeekKey
+  buildUserStatsFromAttempts,
+  buildUserDetailsFromAttempts
 } from '../utils/quizEngine';
+import {
+  QuestionsCacheCursor,
+  compareCursors,
+  getQuestionsCacheKey,
+  readQuestionsCache
+} from '../utils/questionCache';
+import {
+  getUserStatsCacheKey,
+  getUserDetailsCacheKey,
+  readAggregatesCache
+} from '../utils/aggregatesCache';
 
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
+export const QUESTIONS_CACHE_KEY = getQuestionsCacheKey(
+  firebaseConfig.projectId,
+  firebaseConfig.firestoreDatabaseId
+);
+export const USER_STATS_CACHE_KEY = getUserStatsCacheKey(
+  firebaseConfig.projectId,
+  firebaseConfig.firestoreDatabaseId
+);
+export const USER_DETAILS_CACHE_KEY = getUserDetailsCacheKey(
+  firebaseConfig.projectId,
+  firebaseConfig.firestoreDatabaseId
+);
+
+// Document read telemetry tracking for admins
+let documentReadCount = 0;
+const readListeners = new Set<(count: number) => void>();
+
+export function getDocumentReadCount(): number {
+  return documentReadCount;
+}
+
+export function subscribeToReadCount(cb: (count: number) => void): () => void {
+  readListeners.add(cb);
+  return () => readListeners.delete(cb);
+}
+
+export function recordReads(count: number) {
+  documentReadCount += count;
+  readListeners.forEach(cb => cb(documentReadCount));
+}
+
+export async function trackedGetDoc<T>(docRef: any): Promise<any> {
+  const snap = await getDoc(docRef);
+  recordReads(snap.exists() ? 1 : 0);
+  return snap;
+}
+
+export async function trackedGetDocs<T>(queryRef: any): Promise<any> {
+  const snap = await getDocs(queryRef);
+  recordReads(snap.size);
+  return snap;
+}
 
 // Validate connection to Firestore on boot
 async function testConnection() {
@@ -226,25 +279,25 @@ async function addPlayerToDefaultTeam(
       collection(db, 'teams'),
       where('questionCount', '>=', 1)
     );
-    const snapshot = await getDocs(teamsQuery);
+    const snapshot = await trackedGetDocs(teamsQuery);
     if (snapshot.empty) return;
 
     if (options.onlyIfUnassigned) {
-      const alreadyAssigned = snapshot.docs.some(d => {
+      const alreadyAssigned = snapshot.docs.some((d: any) => {
         const ids = d.data().playerIds;
         return Array.isArray(ids) && ids.map(String).includes(uid);
       });
       if (alreadyAssigned) return;
     }
 
-    const defaultTeamDocs = snapshot.docs.filter(d => d.data().isDefault === true);
+    const defaultTeamDocs = snapshot.docs.filter((d: any) => d.data().isDefault === true);
     if (defaultTeamDocs.length === 0) return;
 
     for (const teamDoc of defaultTeamDocs) {
       await runTransaction(db, async transaction => {
         const freshSnap = await transaction.get(teamDoc.ref);
         if (!freshSnap.exists()) return;
-        const data = freshSnap.data();
+        const data = freshSnap.data() as any;
         if (data.isDefault !== true) return;
         const existingIds: string[] = Array.isArray(data.playerIds)
           ? data.playerIds.map(String)
@@ -278,7 +331,7 @@ export async function ensureUserProfileExists(user: User, preferredUsername?: st
     const deletedRef = doc(db, 'deleted_users', user.uid);
     let deletedSnap;
     try {
-      deletedSnap = await getDoc(deletedRef);
+      deletedSnap = await trackedGetDoc(deletedRef);
     } catch (error) {
       handleFirestoreError(error, OperationType.GET, `deleted_users/${user.uid}`);
     }
@@ -291,7 +344,7 @@ export async function ensureUserProfileExists(user: User, preferredUsername?: st
     const userRef = doc(db, 'users', user.uid);
     let existingSnap;
     try {
-      existingSnap = await getDoc(userRef);
+      existingSnap = await trackedGetDoc(userRef);
     } catch (error) {
       handleFirestoreError(error, OperationType.GET, `users/${user.uid}`);
     }
@@ -316,7 +369,7 @@ export async function ensureUserProfileExists(user: User, preferredUsername?: st
     const bootstrapRef = doc(db, 'team_meta', 'bootstrap');
     let bootstrapSnap;
     try {
-      bootstrapSnap = await getDoc(bootstrapRef);
+      bootstrapSnap = await trackedGetDoc(bootstrapRef);
     } catch (error) {
       handleFirestoreError(error, OperationType.GET, 'team_meta/bootstrap');
     }
@@ -339,6 +392,7 @@ export async function ensureUserProfileExists(user: User, preferredUsername?: st
         username: safeUsername,
         displayName: safeUsername.slice(0, 64),
         role: 'coach',
+        isAdmin: true,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       });
@@ -473,6 +527,200 @@ export async function setUserRoleInFirestore(
   }
 }
 
+export async function fetchAttemptsForPlayer(playerId: string): Promise<QuizAttempt[]> {
+  const cleanId = sanitizeId(playerId);
+  if (!cleanId) return [];
+  try {
+    const attemptsQuery = query(collection(db, 'attempts'), where('playerId', '==', cleanId));
+    const snapshot = await trackedGetDocs(attemptsQuery);
+    return snapshot.docs.map((docSnap: any) => {
+      const data = docSnap.data() as any;
+      return {
+        id: docSnap.id,
+        playerId: String(data.playerId || cleanId),
+        teamId: data.teamId ? String(data.teamId) : undefined,
+        totalScore: Number(data.totalScore) || 0,
+        totalQuestions: Number(data.totalQuestions) || 1,
+        correctCount: Number(data.correctCount) || 0,
+        totalTimeSeconds: Number(data.totalTimeSeconds) || 0,
+        maxStreak: Number(data.maxStreak) || 0,
+        passed: typeof data.passed === 'boolean' ? data.passed : undefined,
+        weekKey: String(data.weekKey || ''),
+        timestamp: String(data.timestamp || toIsoString(data.createdAt)),
+        answers: Array.isArray(data.answers) ? data.answers : []
+      } as QuizAttempt;
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, 'attempts');
+    return [];
+  }
+}
+
+function extractMaxUpdatedAtCursor(
+  docs: any[],
+  baseCursor: QuestionsCacheCursor | null
+): QuestionsCacheCursor | null {
+  let maxCursor = baseCursor;
+  const MIN_VALID_SECONDS = 946684800; // 2000-01-01T00:00:00Z
+
+  for (const docSnap of docs) {
+    const rawUpdated = docSnap.data()?.updatedAt;
+    if (rawUpdated instanceof Timestamp && rawUpdated.seconds >= MIN_VALID_SECONDS) {
+      const candidate: QuestionsCacheCursor = {
+        seconds: rawUpdated.seconds,
+        nanoseconds: rawUpdated.nanoseconds
+      };
+      if (!maxCursor || compareCursors(candidate, maxCursor) > 0) {
+        maxCursor = candidate;
+      }
+    }
+  }
+
+  return maxCursor;
+}
+
+export interface AggregatesSyncResult<T> {
+  isDelta: boolean;
+  cachedEntries: T[];
+  fetchedEntries: T[];
+  nextCursor: QuestionsCacheCursor | null;
+}
+
+function mapUserStatsDoc(id: string, d: any): UserStats {
+  return {
+    userId: id,
+    currentStreak: Number(d.currentStreak || 0),
+    bestStreak: Number(d.bestStreak || 0),
+    totalAttemptsAllTime: Number(d.totalAttemptsAllTime || 0),
+    attemptsThisWeek: typeof d.attemptsThisWeek === 'number' ? Number(d.attemptsThisWeek) : undefined,
+    currentWeekKey: typeof d.currentWeekKey === 'string' ? d.currentWeekKey : undefined,
+    bestScoreThisWeek: Number(d.bestScoreThisWeek || 0),
+    bestScoreAllTime: typeof d.bestScoreAllTime === 'number' ? Number(d.bestScoreAllTime) : undefined,
+    updatedAt: d.updatedAt ? toIsoString(d.updatedAt) : undefined
+  };
+}
+
+export async function fetchUserStatsDeltaOrCold(): Promise<AggregatesSyncResult<UserStats>> {
+  const cached = readAggregatesCache<UserStats>(USER_STATS_CACHE_KEY);
+  try {
+    if (cached && cached.lastSyncedCursor && cached.entries.length > 0) {
+      const cursorTs = new Timestamp(
+        cached.lastSyncedCursor.seconds,
+        cached.lastSyncedCursor.nanoseconds
+      );
+      const deltaQuery = query(collection(db, 'user_stats'), where('updatedAt', '>', cursorTs));
+      const snap = await trackedGetDocs(deltaQuery);
+      const fetchedEntries = snap.docs.map((docSnap: any) =>
+        mapUserStatsDoc(docSnap.id, docSnap.data())
+      );
+      return {
+        isDelta: true,
+        cachedEntries: cached.entries,
+        fetchedEntries,
+        nextCursor: extractMaxUpdatedAtCursor(snap.docs, cached.lastSyncedCursor)
+      };
+    }
+
+    const coldQuery = query(
+      collection(db, 'user_stats'),
+      where('totalAttemptsAllTime', '>=', 0)
+    );
+    const snap = await trackedGetDocs(coldQuery);
+    const fetchedEntries = snap.docs.map((docSnap: any) =>
+      mapUserStatsDoc(docSnap.id, docSnap.data())
+    );
+    return {
+      isDelta: false,
+      cachedEntries: [],
+      fetchedEntries,
+      nextCursor: extractMaxUpdatedAtCursor(snap.docs, null)
+    };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, 'user_stats');
+    return {
+      isDelta: Boolean(cached?.lastSyncedCursor),
+      cachedEntries: cached?.entries || [],
+      fetchedEntries: [],
+      nextCursor: cached?.lastSyncedCursor || null
+    };
+  }
+}
+
+function mapUserDetailsDoc(id: string, data: any): UserDetails {
+  return {
+    userId: String(data.userId || id),
+    totalAttempts: Number(data.totalAttempts || 0),
+    passedAttempts: Number(data.passedAttempts || 0),
+    bestTimeAllTime: Number(data.bestTimeAllTime || 0),
+    averagePassedTime: Number(data.averagePassedTime || 0),
+    overallAvgQuestionTime: Number(data.overallAvgQuestionTime || 0),
+    currentStreak: Number(data.currentStreak || 0),
+    bestStreak: Number(data.bestStreak || 0),
+    currentWeekKey: String(data.currentWeekKey || ''),
+    thisWeekPassed: Boolean(data.thisWeekPassed),
+    weeklyTrends: Array.isArray(data.weeklyTrends) ? data.weeklyTrends : [],
+    questionStats: Array.isArray(data.questionStats) ? data.questionStats : [],
+    recentAttempts: Array.isArray(data.recentAttempts) ? data.recentAttempts : [],
+    updatedAt: data.updatedAt ? toIsoString(data.updatedAt) : undefined
+  };
+}
+
+export async function fetchUserDetails(playerId: string): Promise<UserDetails | null> {
+  const cleanId = sanitizeId(playerId);
+  if (!cleanId) return null;
+  try {
+    const snap = await trackedGetDoc(doc(db, 'user_details', cleanId));
+    if (!snap.exists()) return null;
+    return mapUserDetailsDoc(cleanId, snap.data());
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, `user_details/${cleanId}`);
+    return null;
+  }
+}
+
+export async function fetchAllUserDetailsDeltaOrCold(): Promise<AggregatesSyncResult<UserDetails>> {
+  const cached = readAggregatesCache<UserDetails>(USER_DETAILS_CACHE_KEY);
+  try {
+    if (cached && cached.lastSyncedCursor && cached.entries.length > 0) {
+      const cursorTs = new Timestamp(
+        cached.lastSyncedCursor.seconds,
+        cached.lastSyncedCursor.nanoseconds
+      );
+      const deltaQuery = query(collection(db, 'user_details'), where('updatedAt', '>', cursorTs));
+      const snap = await trackedGetDocs(deltaQuery);
+      const fetchedEntries = snap.docs.map((docSnap: any) =>
+        mapUserDetailsDoc(docSnap.id, docSnap.data())
+      );
+      return {
+        isDelta: true,
+        cachedEntries: cached.entries,
+        fetchedEntries,
+        nextCursor: extractMaxUpdatedAtCursor(snap.docs, cached.lastSyncedCursor)
+      };
+    }
+
+    const coldQuery = query(collection(db, 'user_details'), where('totalAttempts', '>=', 0));
+    const snap = await trackedGetDocs(coldQuery);
+    const fetchedEntries = snap.docs.map((docSnap: any) =>
+      mapUserDetailsDoc(docSnap.id, docSnap.data())
+    );
+    return {
+      isDelta: false,
+      cachedEntries: [],
+      fetchedEntries,
+      nextCursor: extractMaxUpdatedAtCursor(snap.docs, null)
+    };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, 'user_details');
+    return {
+      isDelta: Boolean(cached?.lastSyncedCursor),
+      cachedEntries: cached?.entries || [],
+      fetchedEntries: [],
+      nextCursor: cached?.lastSyncedCursor || null
+    };
+  }
+}
+
 export async function deletePlayerFromFirestore(
   targetPlayer: Player,
   knownAttempts: QuizAttempt[],
@@ -487,8 +735,8 @@ export async function deletePlayerFromFirestore(
   let queriedAttemptIds: string[] = [];
   try {
     const attemptsQuery = query(collection(db, 'attempts'), where('playerId', '==', targetPlayer.id));
-    const snapshot = await getDocs(attemptsQuery);
-    queriedAttemptIds = snapshot.docs.map(d => sanitizeId(d.id)).filter(Boolean);
+    const snapshot = await trackedGetDocs(attemptsQuery);
+    queriedAttemptIds = snapshot.docs.map((d: any) => sanitizeId(d.id)).filter(Boolean);
   } catch (error) {
     handleFirestoreError(error, OperationType.LIST, 'attempts');
   }
@@ -508,6 +756,8 @@ export async function deletePlayerFromFirestore(
   });
   primaryBatch.delete(doc(db, 'users', targetUid));
   primaryBatch.delete(doc(db, 'coaches', targetUid));
+  primaryBatch.delete(doc(db, 'user_stats', targetUid));
+  primaryBatch.delete(doc(db, 'user_details', targetUid));
 
   for (const team of teams) {
     if (team.playerIds.includes(targetPlayer.id)) {
@@ -624,17 +874,161 @@ export async function toggleQuestionPriorityInFirestore(
   }
 }
 
-export async function deleteQuestionFromFirestore(questionId: string): Promise<void> {
-  const qId = sanitizeId(questionId);
-  const path = `questions/${qId}`;
-  try {
-    await deleteDoc(doc(db, 'questions', qId));
-  } catch (error) {
-    handleFirestoreError(error, OperationType.DELETE, path);
+function mapQuestionDoc(docSnap: any): Question {
+  const data = docSnap.data();
+  const createdAtIso = toIsoString(data.createdAt);
+  return {
+    id: docSnap.id,
+    title: String(data.title || ''),
+    scenario: String(data.scenario || ''),
+    keyConcept: String(data.keyConcept || ''),
+    isPriorityFocus: Boolean(data.isPriorityFocus),
+    tags: Array.isArray(data.tags) ? data.tags.map(String) : [],
+    teamIds: Array.isArray(data.teamIds) ? data.teamIds.map(String) : undefined,
+    explanation: String(data.explanation || ''),
+    options: Array.isArray(data.options) ? data.options : [],
+    diagram: data.diagram || undefined,
+    imageUrl: data.imageUrl ? String(data.imageUrl) : undefined,
+    createdAt: createdAtIso,
+    updatedAt: data.updatedAt ? toIsoString(data.updatedAt) : createdAtIso
+  } as Question;
+}
+
+function extractMaxQuestionCursor(
+  docs: any[],
+  baseCursor: QuestionsCacheCursor | null
+): QuestionsCacheCursor | null {
+  let maxUpdatedCursor = baseCursor;
+  let maxCreatedCursor: QuestionsCacheCursor | null = null;
+  const MIN_VALID_SECONDS = 946684800; // 2000-01-01T00:00:00Z
+
+  for (const docSnap of docs) {
+    const data = docSnap.data();
+    const rawUpdated = data.updatedAt;
+    if (rawUpdated instanceof Timestamp && rawUpdated.seconds >= MIN_VALID_SECONDS) {
+      const candidate: QuestionsCacheCursor = {
+        seconds: rawUpdated.seconds,
+        nanoseconds: rawUpdated.nanoseconds
+      };
+      if (!maxUpdatedCursor || compareCursors(candidate, maxUpdatedCursor) > 0) {
+        maxUpdatedCursor = candidate;
+      }
+    } else if (data.createdAt instanceof Timestamp && data.createdAt.seconds >= MIN_VALID_SECONDS) {
+      const fallbackCandidate: QuestionsCacheCursor = {
+        seconds: data.createdAt.seconds,
+        nanoseconds: data.createdAt.nanoseconds
+      };
+      if (!maxCreatedCursor || compareCursors(fallbackCandidate, maxCreatedCursor) > 0) {
+        maxCreatedCursor = fallbackCandidate;
+      }
+    }
+  }
+
+  return maxUpdatedCursor || maxCreatedCursor;
+}
+
+export interface QuestionsSyncResult {
+  isDelta: boolean;
+  cachedQuestions: Question[];
+  fetchedQuestions: Question[];
+  nextCursor: QuestionsCacheCursor | null;
+  missingUpdatedAtIds: string[];
+}
+
+export async function fetchQuestionsDeltaOrCold(): Promise<QuestionsSyncResult> {
+  const cached = readQuestionsCache(QUESTIONS_CACHE_KEY);
+  if (cached && cached.lastSyncedCursor && cached.questions.length > 0) {
+    const cursorTs = new Timestamp(
+      cached.lastSyncedCursor.seconds,
+      cached.lastSyncedCursor.nanoseconds
+    );
+    const deltaQuery = query(collection(db, 'questions'), where('updatedAt', '>', cursorTs));
+    const snap = await trackedGetDocs(deltaQuery);
+    const fetchedQuestions = snap.docs.map(mapQuestionDoc);
+    return {
+      isDelta: true,
+      cachedQuestions: cached.questions,
+      fetchedQuestions,
+      nextCursor: extractMaxQuestionCursor(snap.docs, cached.lastSyncedCursor),
+      missingUpdatedAtIds: []
+    };
+  }
+
+  const coldQuery = query(
+    collection(db, 'questions'),
+    where('isPriorityFocus', 'in', [true, false])
+  );
+  const snap = await trackedGetDocs(coldQuery);
+  const missingUpdatedAtIds: string[] = [];
+  const fetchedQuestions = snap.docs.map((docSnap: any) => {
+    const data = docSnap.data();
+    if (!(data.updatedAt instanceof Timestamp)) {
+      missingUpdatedAtIds.push(docSnap.id);
+    }
+    return mapQuestionDoc(docSnap);
+  });
+
+  return {
+    isDelta: false,
+    cachedQuestions: [],
+    fetchedQuestions,
+    nextCursor: extractMaxQuestionCursor(snap.docs, null),
+    missingUpdatedAtIds
+  };
+}
+
+export async function backfillMissingQuestionUpdatedAt(questionIds: string[]): Promise<void> {
+  const cleanIds = questionIds.map(id => sanitizeId(id)).filter(Boolean);
+  if (cleanIds.length === 0) return;
+
+  for (let i = 0; i < cleanIds.length; i += 400) {
+    const chunk = cleanIds.slice(i, i + 400);
+    const batch = writeBatch(db);
+    for (const qId of chunk) {
+      batch.update(doc(db, 'questions', qId), {
+        updatedAt: serverTimestamp()
+      });
+    }
+    try {
+      await batch.commit();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'questions');
+    }
   }
 }
 
-export async function saveAttemptToFirestore(attempt: QuizAttempt): Promise<void> {
+export async function deleteQuestionFromFirestore(
+  questionId: string,
+  currentConfig?: QuizConfig
+): Promise<string[]> {
+  const qId = sanitizeId(questionId);
+  const path = `questions/${qId}`;
+  const nextDeletedIds = Array.from(
+    new Set([...(currentConfig?.deletedQuestionIds || []), qId])
+  ).slice(-100);
+
+  const batch = writeBatch(db);
+  batch.delete(doc(db, 'questions', qId));
+  batch.set(
+    doc(db, 'team_meta', 'quiz_config'),
+    {
+      deletedQuestionIds: nextDeletedIds,
+      updatedAt: serverTimestamp()
+    },
+    { merge: true }
+  );
+
+  try {
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+  return nextDeletedIds;
+}
+
+export async function saveAttemptToFirestore(
+  attempt: QuizAttempt
+): Promise<{ stats: UserStats; details: UserDetails } | null> {
   const attemptId = sanitizeId(attempt.id);
   const path = `attempts/${attemptId}`;
 
@@ -667,113 +1061,143 @@ export async function saveAttemptToFirestore(attempt: QuizAttempt): Promise<void
 
   try {
     await setDoc(doc(db, 'attempts', attemptId), payload);
-    await updateUserStatsInFirestore(attempt.playerId);
+    return await updateUserStatsInFirestore(attempt.playerId);
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, path);
+    return null;
   }
 }
 
-export async function updateUserStatsInFirestore(playerId: string, knownAttempts?: QuizAttempt[]): Promise<void> {
+function mapAttemptDoc(docSnap: any): QuizAttempt {
+  const data = docSnap.data();
+  return {
+    id: docSnap.id,
+    playerId: String(data.playerId || ''),
+    teamId: data.teamId ? String(data.teamId) : undefined,
+    timestamp: String(data.timestamp || toIsoString(data.createdAt)),
+    weekKey: String(data.weekKey || ''),
+    totalScore: Number(data.totalScore || 0),
+    correctCount: Number(data.correctCount || 0),
+    totalQuestions: Number(data.totalQuestions || 1),
+    totalTimeSeconds: Number(data.totalTimeSeconds || 0),
+    maxStreak: Number(data.maxStreak || 0),
+    answers: Array.isArray(data.answers) ? data.answers : [],
+    passed: typeof data.passed === 'boolean' ? data.passed : undefined
+  };
+}
+
+export async function updateUserStatsInFirestore(
+  playerId: string,
+  knownAttempts?: QuizAttempt[]
+): Promise<{ stats: UserStats; details: UserDetails } | null> {
+  const cleanId = sanitizeId(playerId);
+  if (!cleanId) return null;
   try {
-    let attempts = knownAttempts;
-    if (!attempts) {
-      const attemptsQuery = query(collection(db, 'attempts'), where('playerId', '==', playerId));
-      const snapshot = await getDocs(attemptsQuery);
-      attempts = snapshot.docs.map(d => {
-        const data = d.data();
-        return {
-          id: d.id,
-          playerId: String(data.playerId || ''),
-          teamId: data.teamId ? String(data.teamId) : undefined,
-          timestamp: String(data.timestamp || toIsoString(data.createdAt)),
-          weekKey: String(data.weekKey || ''),
-          totalScore: Number(data.totalScore || 0),
-          correctCount: Number(data.correctCount || 0),
-          totalQuestions: Number(data.totalQuestions || 1),
-          totalTimeSeconds: Number(data.totalTimeSeconds || 0),
-          maxStreak: Number(data.maxStreak || 0),
-          answers: Array.isArray(data.answers) ? data.answers : [],
-          passed: typeof data.passed === 'boolean' ? data.passed : undefined
-        } as QuizAttempt;
-      });
+    let attempts: QuizAttempt[];
+    if (knownAttempts) {
+      attempts = knownAttempts;
+    } else {
+      const attemptsQuery = query(collection(db, 'attempts'), where('playerId', '==', cleanId));
+      const snapshot = await trackedGetDocs(attemptsQuery);
+      attempts = snapshot.docs.map(mapAttemptDoc);
     }
 
-    const currentWeekKey = getWeekKey();
-    const thisWeekAttempts = attempts.filter(a => a.weekKey === currentWeekKey);
-    const passedThisWeek = thisWeekAttempts.filter(
-      a => a.passed === true || a.correctCount === a.totalQuestions
-    );
-    const bestScoreThisWeek =
-      passedThisWeek.length > 0 ? Math.min(...passedThisWeek.map(a => a.totalTimeSeconds)) : 0;
-    const currentStreak = calculateCurrentErrorFreeStreak(attempts);
-    const bestStreak = calculateBestErrorFreeStreak(attempts);
-    const totalAttemptsAllTime = attempts.length;
+    const statsPayload = buildUserStatsFromAttempts(cleanId, attempts);
+    const detailsPayload = buildUserDetailsFromAttempts(cleanId, attempts);
 
-    await setDoc(doc(db, 'user_stats', playerId), {
-      userId: playerId,
-      currentStreak,
-      bestStreak,
-      totalAttemptsAllTime,
-      bestScoreThisWeek,
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'user_stats', cleanId), {
+      ...stripUndefined(statsPayload),
       updatedAt: serverTimestamp()
-    }, { merge: true });
+    });
+    batch.set(doc(db, 'user_details', cleanId), {
+      ...stripUndefined(detailsPayload),
+      updatedAt: serverTimestamp()
+    });
+    await batch.commit();
+
+    const nowIso = new Date().toISOString();
+    return {
+      stats: { ...statsPayload, updatedAt: nowIso },
+      details: { ...detailsPayload, updatedAt: nowIso }
+    };
   } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, `user_stats/${playerId}`);
+    handleFirestoreError(error, OperationType.WRITE, `user_stats/${cleanId}`);
+    return null;
   }
 }
 
-export async function migrateAllUserStatsToFirestore(players: Player[], attempts: QuizAttempt[]): Promise<number> {
-  const attemptsByPlayer = new Map<string, QuizAttempt[]>();
-  for (const a of attempts) {
-    const list = attemptsByPlayer.get(a.playerId) || [];
-    list.push(a);
-    attemptsByPlayer.set(a.playerId, list);
-  }
-
-  let count = 0;
-  for (const player of players) {
-    if (player.role === 'coach' && !attemptsByPlayer.has(player.id)) continue;
-    const pAttempts = attemptsByPlayer.get(player.id) || [];
-    await updateUserStatsInFirestore(player.id, pAttempts);
-    count += 1;
-  }
-  return count;
-}
-
-export async function migrateAllAttemptsToTeam(targetTeamId: string): Promise<number> {
-  const cleanTeamId = sanitizeId(targetTeamId);
-  if (!cleanTeamId) {
-    throw new Error('Ungültige Team-ID.');
-  }
-
-  let docsToUpdate: string[] = [];
+export async function migrateAllUserAggregatesInFirestore(
+  players: Player[]
+): Promise<{
+  updatedPlayersCount: number;
+  processedAttemptsCount: number;
+  statsMap: Map<string, UserStats>;
+  detailsMap: Map<string, UserDetails>;
+}> {
+  let allAttempts: QuizAttempt[] = [];
   try {
-    const attemptsQuery = query(collection(db, 'attempts'), where('totalQuestions', '>', 0));
-    const snapshot = await getDocs(attemptsQuery);
-    docsToUpdate = snapshot.docs
-      .filter(d => d.data().teamId !== cleanTeamId)
-      .map(d => d.id);
+    const snapshot = await trackedGetDocs(collection(db, 'attempts'));
+    allAttempts = snapshot.docs.map(mapAttemptDoc);
   } catch (error) {
     handleFirestoreError(error, OperationType.LIST, 'attempts');
   }
 
-  for (let i = 0; i < docsToUpdate.length; i += 400) {
-    const chunk = docsToUpdate.slice(i, i + 400);
+  const attemptsByPlayer = new Map<string, QuizAttempt[]>();
+  for (const att of allAttempts) {
+    if (!att.playerId) continue;
+    const list = attemptsByPlayer.get(att.playerId) || [];
+    list.push(att);
+    attemptsByPlayer.set(att.playerId, list);
+  }
+
+  const targetUserIds = Array.from(
+    new Set(players.map(p => sanitizeId(p.id)).filter(Boolean))
+  );
+
+  const statsMap = new Map<string, UserStats>();
+  const detailsMap = new Map<string, UserDetails>();
+  const entries: Array<{ userId: string; stats: UserStats; details: UserDetails }> = [];
+  const nowIso = new Date().toISOString();
+
+  for (const userId of targetUserIds) {
+    const playerAttempts = attemptsByPlayer.get(userId) || [];
+    const stats = buildUserStatsFromAttempts(userId, playerAttempts);
+    const details = buildUserDetailsFromAttempts(userId, playerAttempts);
+    statsMap.set(userId, { ...stats, updatedAt: nowIso });
+    detailsMap.set(userId, { ...details, updatedAt: nowIso });
+    entries.push({ userId, stats, details });
+  }
+
+  // 2 writes per user -> 200 users = 400 batch operations (below Firestore's 500-op limit)
+  for (let i = 0; i < entries.length; i += 200) {
+    const chunk = entries.slice(i, i + 200);
     const batch = writeBatch(db);
-    for (const attemptId of chunk) {
-      batch.update(doc(db, 'attempts', attemptId), {
-        teamId: cleanTeamId
+    for (const item of chunk) {
+      batch.set(doc(db, 'user_stats', item.userId), {
+        ...stripUndefined(item.stats),
+        updatedAt: serverTimestamp()
+      });
+      batch.set(doc(db, 'user_details', item.userId), {
+        ...stripUndefined(item.details),
+        updatedAt: serverTimestamp()
       });
     }
     try {
       await batch.commit();
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, 'attempts');
+      handleFirestoreError(error, OperationType.WRITE, 'user_stats');
     }
   }
 
-  return docsToUpdate.length;
+  return {
+    updatedPlayersCount: entries.length,
+    processedAttemptsCount: allAttempts.length,
+    statsMap,
+    detailsMap
+  };
 }
+
 
 export async function saveQuizConfigToFirestore(config: QuizConfig): Promise<void> {
   const path = 'team_meta/quiz_config';

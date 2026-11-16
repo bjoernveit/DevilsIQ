@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   getWeekKey,
+  getPreviousWeekKey,
   generateQuizSession,
   calculateQuestionScore,
   calculateTacticalGaps,
@@ -13,6 +14,7 @@ import {
   calculateCurrentErrorFreeStreak,
   calculateBestErrorFreeStreak,
   calculatePlayerMedals,
+  calculateCompletedWeekMedals,
   calculateQuestionStats,
   getOptionDisplayText,
   ONLINE_WINDOW_MS,
@@ -22,7 +24,7 @@ import {
   calculateTacticalGapsFromQuestionStats,
   aggregateQuestionStatsFromUserDetails
 } from './quizEngine';
-import { Question, QuizConfig, QuizAttempt, Player, Team, UserDetails } from '../types/basketball';
+import { Question, QuizConfig, QuizAttempt, Player, Team, UserDetails, UserStats } from '../types/basketball';
 
 const dummyQuestions: Question[] = [
   {
@@ -845,7 +847,8 @@ test('calculateWeeklyLeaderboard and calculateAllTimeLeaderboard read attempt co
 
   const medals = calculatePlayerMedals([], '2026-W46', new Set(['p1', 'p2', 'p3']), userStatsMap);
   assert.deepEqual(medals.get('p1'), { gold: 1, silver: 0, bronze: 0 });
-  assert.equal(medals.get('p3'), undefined);
+  // p3 has an unfinalized W45 best score (11.2s) -> receives provisional Gold for W45 until finalized
+  assert.deepEqual(medals.get('p3'), { gold: 1, silver: 0, bronze: 0 });
 });
 
 test('buildUserStatsFromAttempts and buildUserDetailsFromAttempts precalculate all detail metrics and match tactical gaps', () => {
@@ -1040,3 +1043,129 @@ test('aggregateQuestionStatsFromUserDetails aggregates per-question stats across
   assert.equal(teamOnly.get('q1')?.correct, 2);
   assert.equal(teamOnly.get('q2'), undefined);
 });
+
+test('getPreviousWeekKey steps back one ISO week including year boundaries', () => {
+  assert.equal(getWeekKey('2026-11-16T12:00:00Z'), '2026-W47');
+  assert.equal(getPreviousWeekKey('2026-11-16T12:00:00Z'), '2026-W46');
+
+  // 2027-01-04 is Monday of 2027-W01; 7 days prior is 2026-12-28 (2026-W53)
+  assert.equal(getWeekKey('2027-01-04T12:00:00Z'), '2027-W01');
+  assert.equal(getPreviousWeekKey('2027-01-04T12:00:00Z'), '2026-W53');
+});
+
+test('calculateCompletedWeekMedals scopes strictly to (afterWeekExclusive, upToWeekInclusive]', () => {
+  const mk = (id: string, playerId: string, weekKey: string, secs: number): QuizAttempt => ({
+    id,
+    playerId,
+    timestamp: '2026-11-01T10:00:00Z',
+    weekKey,
+    totalScore: secs,
+    correctCount: 5,
+    totalQuestions: 5,
+    totalTimeSeconds: secs,
+    maxStreak: 5,
+    answers: [],
+    passed: true
+  });
+
+  const attempts: QuizAttempt[] = [
+    mk('w44-1', 'p1', '2026-W44', 10),
+    mk('w45-1', 'p2', '2026-W45', 12),
+    mk('w46-1', 'p1', '2026-W46', 14),
+    mk('w46-2', 'p2', '2026-W46', 16),
+    mk('w47-1', 'p3', '2026-W47', 8) // current week -> excluded when upToWeekInclusive = 2026-W46
+  ];
+
+  // Incremental finalization for W46 only (after W45, through W46)
+  const w46Only = calculateCompletedWeekMedals(attempts, '2026-W45', '2026-W46', new Set(['p1', 'p2', 'p3']));
+  assert.deepEqual(w46Only.get('p1'), { gold: 1, silver: 0, bronze: 0 });
+  assert.deepEqual(w46Only.get('p2'), { gold: 0, silver: 1, bronze: 0 });
+  assert.equal(w46Only.get('p3'), undefined);
+
+  // Full backfill through W46 (W44 + W45 + W46)
+  const allPast = calculateCompletedWeekMedals(attempts, undefined, '2026-W46', new Set(['p1', 'p2', 'p3']));
+  assert.deepEqual(allPast.get('p1'), { gold: 2, silver: 0, bronze: 0 });
+  assert.deepEqual(allPast.get('p2'), { gold: 1, silver: 1, bronze: 0 });
+  assert.equal(allPast.get('p3'), undefined);
+});
+
+test('calculatePlayerMedals accumulates past medals, provisional unfinalized past weeks, and live current week from userStatsMap', () => {
+  const validIds = new Set(['p1', 'p2', 'p3', 'p4']);
+  const statsMap = new Map<string, UserStats>([
+    [
+      'p1',
+      {
+        userId: 'p1',
+        currentStreak: 2,
+        bestStreak: 3,
+        totalAttemptsAllTime: 10,
+        attemptsThisWeek: 1,
+        currentWeekKey: '2026-W47',
+        bestScoreThisWeek: 15.0,
+        pastGold: 2,
+        pastSilver: 1,
+        pastBronze: 0,
+        medalsThroughWeek: '2026-W45'
+      }
+    ],
+    [
+      'p2',
+      {
+        userId: 'p2',
+        currentStreak: 1,
+        bestStreak: 2,
+        totalAttemptsAllTime: 8,
+        attemptsThisWeek: 1,
+        currentWeekKey: '2026-W46', // unfinalized past week (> W45 and < W47)
+        bestScoreThisWeek: 12.0, // fastest in W46 -> provisional Gold
+        pastGold: 0,
+        pastSilver: 1,
+        pastBronze: 1,
+        medalsThroughWeek: '2026-W45'
+      }
+    ],
+    [
+      'p3',
+      {
+        userId: 'p3',
+        currentStreak: 1,
+        bestStreak: 1,
+        totalAttemptsAllTime: 5,
+        attemptsThisWeek: 2,
+        currentWeekKey: '2026-W47',
+        bestScoreThisWeek: 11.0, // faster than p1 in W47 -> live Gold; p1 gets live Silver
+        pastGold: 0,
+        pastSilver: 0,
+        pastBronze: 0,
+        medalsThroughWeek: '2026-W45'
+      }
+    ],
+    [
+      'p4',
+      {
+        userId: 'p4',
+        currentStreak: 1,
+        bestStreak: 1,
+        totalAttemptsAllTime: 2,
+        attemptsThisWeek: 1,
+        currentWeekKey: '2026-W45', // <= medalsThroughWeek -> must NOT be double counted provisionally
+        bestScoreThisWeek: 9.0,
+        pastGold: 1,
+        pastSilver: 0,
+        pastBronze: 0,
+        medalsThroughWeek: '2026-W45'
+      }
+    ]
+  ]);
+
+  const medals = calculatePlayerMedals([], '2026-W47', validIds, statsMap);
+  // p1: 2 pastGold + 1 pastSilver + live W47 Silver => { gold: 2, silver: 2, bronze: 0 }
+  assert.deepEqual(medals.get('p1'), { gold: 2, silver: 2, bronze: 0 });
+  // p2: 1 pastSilver + 1 pastBronze + provisional W46 Gold => { gold: 1, silver: 1, bronze: 1 }
+  assert.deepEqual(medals.get('p2'), { gold: 1, silver: 1, bronze: 1 });
+  // p3: live W47 Gold => { gold: 1, silver: 0, bronze: 0 }
+  assert.deepEqual(medals.get('p3'), { gold: 1, silver: 0, bronze: 0 });
+  // p4: 1 pastGold only (W45 already finalized) => { gold: 1, silver: 0, bronze: 0 }
+  assert.deepEqual(medals.get('p4'), { gold: 1, silver: 0, bronze: 0 });
+});
+

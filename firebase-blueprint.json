@@ -211,6 +211,11 @@
         "deletedQuestionIds": {
           "type": "array"
         },
+        "medalsFinalizedThroughWeek": {
+          "type": "string",
+          "maxLength": 16,
+          "pattern": "^[0-9]{4}-W[0-9]{2}$"
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time"
@@ -327,6 +332,20 @@
         },
         "bestScoreAllTime": {
           "type": "number"
+        },
+        "pastGold": {
+          "type": "integer"
+        },
+        "pastSilver": {
+          "type": "integer"
+        },
+        "pastBronze": {
+          "type": "integer"
+        },
+        "medalsThroughWeek": {
+          "type": "string",
+          "maxLength": 16,
+          "pattern": "^[0-9]{4}-W[0-9]{2}$"
         },
         "updatedAt": {
           "type": "string",

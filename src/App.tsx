@@ -9,6 +9,7 @@ import {
   getTeamQuizConfig,
   calculatePlayerMedals,
   getWeekKey,
+  getPreviousWeekKey,
   isPlayerOnline
 } from './utils/quizEngine';
 import {
@@ -38,6 +39,7 @@ import {
   trackedGetDocs,
   subscribeToReadCount,
   migrateAllUserAggregatesInFirestore,
+  finalizeCompletedWeekMedalsIfNeeded,
   fetchAllUserDetailsDeltaOrCold,
   fetchUserStatsDeltaOrCold,
   fetchQuestionsDeltaOrCold,
@@ -89,6 +91,7 @@ export default function App() {
   const [attempts, setAttempts] = useState<QuizAttempt[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
   const [quizConfig, setQuizConfig] = useState<QuizConfig>(DEFAULT_QUIZ_CONFIG);
+  const [quizConfigExists, setQuizConfigExists] = useState<boolean>(false);
 
   const [activeTab, setActiveTab] = useState<TabType>('quiz');
   const [coachSubTab, setCoachSubTab] = useState<CoachSubTab>('analytics');
@@ -244,11 +247,18 @@ export default function App() {
       }
 
       let deletedQuestionIds: string[] = [];
-      if (configSnap.exists()) {
+      let loadedMedalsFinalizedThrough: string | undefined;
+      const configDocExists = configSnap.exists();
+      setQuizConfigExists(configDocExists);
+      if (configDocExists) {
         const data = configSnap.data();
         deletedQuestionIds = Array.isArray(data.deletedQuestionIds)
           ? data.deletedQuestionIds.map(String)
           : [];
+        loadedMedalsFinalizedThrough =
+          typeof data.medalsFinalizedThroughWeek === 'string'
+            ? data.medalsFinalizedThroughWeek
+            : undefined;
         setQuizConfig({
           questionCount: Number(data.questionCount || DEFAULT_QUIZ_CONFIG.questionCount),
           timePerQuestionSeconds: Number(
@@ -264,7 +274,8 @@ export default function App() {
               : DEFAULT_QUIZ_CONFIG.ensureDiverseTopics,
           selectedTags: Array.isArray(data.selectedTags) ? data.selectedTags.map(String) : undefined,
           topicLabels: Array.isArray(data.topicLabels) ? data.topicLabels.map(String) : undefined,
-          deletedQuestionIds: deletedQuestionIds.length > 0 ? deletedQuestionIds : undefined
+          deletedQuestionIds: deletedQuestionIds.length > 0 ? deletedQuestionIds : undefined,
+          medalsFinalizedThroughWeek: loadedMedalsFinalizedThrough
         });
       }
 
@@ -290,6 +301,42 @@ export default function App() {
       const loadedUserIsCoach = listPlayers.some(p => p.id === firebaseUser.uid && p.role === 'coach');
       if (loadedUserIsCoach && questionsSync.missingUpdatedAtIds.length > 0) {
         void backfillMissingQuestionUpdatedAt(questionsSync.missingUpdatedAtIds).catch(() => {});
+      }
+
+      const loadCurrentWeek = getWeekKey();
+      const loadPreviousWeek = getPreviousWeekKey();
+      if (
+        loadedUserIsCoach &&
+        (!loadedMedalsFinalizedThrough || loadedMedalsFinalizedThrough < loadPreviousWeek)
+      ) {
+        const statsMapSnapshot = new Map(mergedStats.map(s => [s.userId, s]));
+        void finalizeCompletedWeekMedalsIfNeeded({
+          players: listPlayers,
+          existingStatsMap: statsMapSnapshot,
+          medalsFinalizedThroughWeek: loadedMedalsFinalizedThrough,
+          configExists: configDocExists,
+          currentWeekKey: loadCurrentWeek,
+          previousWeekKey: loadPreviousWeek
+        })
+          .then(res => {
+            if (!res) return;
+            if (res.updatedStats.length > 0) {
+              setUserStatsMap(prev => {
+                const next = new Map(prev);
+                for (const st of res.updatedStats) {
+                  next.set(st.userId, st);
+                }
+                return next;
+              });
+              upsertAggregateEntriesInCache(USER_STATS_CACHE_KEY, res.updatedStats);
+            }
+            setQuizConfigExists(true);
+            setQuizConfig(prev => ({
+              ...prev,
+              medalsFinalizedThroughWeek: res.medalsFinalizedThroughWeek
+            }));
+          })
+          .catch(() => {});
       }
 
       // Attempts are not loaded on page load to conserve Firestore reads (aggregated user_stats are used instead)
@@ -529,7 +576,10 @@ export default function App() {
     setLatestAttempt(normalizedAttempt);
     setIsQuizActive(false);
     setIsResultsOpen(true);
-    const updatedAggregates = await saveAttemptToFirestore(normalizedAttempt);
+    const updatedAggregates = await saveAttemptToFirestore(
+      normalizedAttempt,
+      userStatsMap.get(firebaseUser.uid)
+    );
     if (updatedAggregates) {
       setUserStatsMap(prev => {
         const next = new Map(prev);
@@ -697,10 +747,15 @@ export default function App() {
     if (!currentPlayer.isAdmin) {
       throw new Error('Nur Admins können diese Migration ausführen.');
     }
-    const result = await migrateAllUserAggregatesInFirestore(players);
+    const result = await migrateAllUserAggregatesInFirestore(players, quizConfigExists);
     setUserStatsMap(result.statsMap);
     setUserDetailsMap(result.detailsMap);
     setAllUserDetailsLoaded(true);
+    setQuizConfigExists(true);
+    setQuizConfig(prev => ({
+      ...prev,
+      medalsFinalizedThroughWeek: result.medalsFinalizedThroughWeek
+    }));
     upsertAggregateEntriesInCache(USER_STATS_CACHE_KEY, Array.from(result.statsMap.values()));
     upsertAggregateEntriesInCache(USER_DETAILS_CACHE_KEY, Array.from(result.detailsMap.values()));
     return {

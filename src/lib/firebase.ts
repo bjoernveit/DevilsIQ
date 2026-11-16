@@ -37,7 +37,10 @@ import {
 import { INITIAL_QUESTIONS, ALL_TAGS } from '../data/initialData';
 import {
   buildUserStatsFromAttempts,
-  buildUserDetailsFromAttempts
+  buildUserDetailsFromAttempts,
+  calculateCompletedWeekMedals,
+  getPreviousWeekKey,
+  getWeekKey
 } from '../utils/quizEngine';
 import {
   QuestionsCacheCursor,
@@ -596,6 +599,10 @@ function mapUserStatsDoc(id: string, d: any): UserStats {
     currentWeekKey: typeof d.currentWeekKey === 'string' ? d.currentWeekKey : undefined,
     bestScoreThisWeek: Number(d.bestScoreThisWeek || 0),
     bestScoreAllTime: typeof d.bestScoreAllTime === 'number' ? Number(d.bestScoreAllTime) : undefined,
+    pastGold: typeof d.pastGold === 'number' ? Number(d.pastGold) : undefined,
+    pastSilver: typeof d.pastSilver === 'number' ? Number(d.pastSilver) : undefined,
+    pastBronze: typeof d.pastBronze === 'number' ? Number(d.pastBronze) : undefined,
+    medalsThroughWeek: typeof d.medalsThroughWeek === 'string' ? d.medalsThroughWeek : undefined,
     updatedAt: d.updatedAt ? toIsoString(d.updatedAt) : undefined
   };
 }
@@ -1027,7 +1034,8 @@ export async function deleteQuestionFromFirestore(
 }
 
 export async function saveAttemptToFirestore(
-  attempt: QuizAttempt
+  attempt: QuizAttempt,
+  existingStats?: UserStats
 ): Promise<{ stats: UserStats; details: UserDetails } | null> {
   const attemptId = sanitizeId(attempt.id);
   const path = `attempts/${attemptId}`;
@@ -1061,7 +1069,7 @@ export async function saveAttemptToFirestore(
 
   try {
     await setDoc(doc(db, 'attempts', attemptId), payload);
-    return await updateUserStatsInFirestore(attempt.playerId);
+    return await updateUserStatsInFirestore(attempt.playerId, undefined, existingStats);
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, path);
     return null;
@@ -1088,7 +1096,8 @@ function mapAttemptDoc(docSnap: any): QuizAttempt {
 
 export async function updateUserStatsInFirestore(
   playerId: string,
-  knownAttempts?: QuizAttempt[]
+  knownAttempts?: QuizAttempt[],
+  existingStats?: UserStats
 ): Promise<{ stats: UserStats; details: UserDetails } | null> {
   const cleanId = sanitizeId(playerId);
   if (!cleanId) return null;
@@ -1106,10 +1115,15 @@ export async function updateUserStatsInFirestore(
     const detailsPayload = buildUserDetailsFromAttempts(cleanId, attempts);
 
     const batch = writeBatch(db);
-    batch.set(doc(db, 'user_stats', cleanId), {
-      ...stripUndefined(statsPayload),
-      updatedAt: serverTimestamp()
-    });
+    // Merge preserves finalized pastGold/pastSilver/pastBronze/medalsThroughWeek stored on Firestore
+    batch.set(
+      doc(db, 'user_stats', cleanId),
+      {
+        ...stripUndefined(statsPayload),
+        updatedAt: serverTimestamp()
+      },
+      { merge: true }
+    );
     batch.set(doc(db, 'user_details', cleanId), {
       ...stripUndefined(detailsPayload),
       updatedAt: serverTimestamp()
@@ -1117,8 +1131,14 @@ export async function updateUserStatsInFirestore(
     await batch.commit();
 
     const nowIso = new Date().toISOString();
+    const preservedPastMedals: Partial<UserStats> = {};
+    if (typeof existingStats?.pastGold === 'number') preservedPastMedals.pastGold = existingStats.pastGold;
+    if (typeof existingStats?.pastSilver === 'number') preservedPastMedals.pastSilver = existingStats.pastSilver;
+    if (typeof existingStats?.pastBronze === 'number') preservedPastMedals.pastBronze = existingStats.pastBronze;
+    if (existingStats?.medalsThroughWeek) preservedPastMedals.medalsThroughWeek = existingStats.medalsThroughWeek;
+
     return {
-      stats: { ...statsPayload, updatedAt: nowIso },
+      stats: { ...statsPayload, ...preservedPastMedals, updatedAt: nowIso },
       details: { ...detailsPayload, updatedAt: nowIso }
     };
   } catch (error) {
@@ -1127,13 +1147,155 @@ export async function updateUserStatsInFirestore(
   }
 }
 
+export async function finalizeCompletedWeekMedalsIfNeeded(params: {
+  players: Player[];
+  existingStatsMap: Map<string, UserStats>;
+  medalsFinalizedThroughWeek?: string;
+  configExists: boolean;
+  currentWeekKey?: string;
+  previousWeekKey?: string;
+}): Promise<{ updatedStats: UserStats[]; medalsFinalizedThroughWeek: string } | null> {
+  const currentWeekKey = params.currentWeekKey || getWeekKey();
+  const previousWeekKey = params.previousWeekKey || getPreviousWeekKey();
+
+  if (params.medalsFinalizedThroughWeek && params.medalsFinalizedThroughWeek >= previousWeekKey) {
+    return null;
+  }
+
+  try {
+    const pastAttemptsQuery = params.medalsFinalizedThroughWeek
+      ? query(
+          collection(db, 'attempts'),
+          where('weekKey', '>', params.medalsFinalizedThroughWeek),
+          where('weekKey', '<', currentWeekKey)
+        )
+      : query(collection(db, 'attempts'), where('weekKey', '<', currentWeekKey));
+
+    const snap = await trackedGetDocs(pastAttemptsQuery);
+    const pastAttempts = snap.docs.map(mapAttemptDoc);
+    const validPlayerIds = new Set(params.players.map(p => sanitizeId(p.id)).filter(Boolean));
+    const newlyEarned = calculateCompletedWeekMedals(
+      pastAttempts,
+      params.medalsFinalizedThroughWeek,
+      previousWeekKey,
+      validPlayerIds.size > 0 ? validPlayerIds : undefined
+    );
+
+    const nowIso = new Date().toISOString();
+    const updatedStats: UserStats[] = [];
+    const writeOps: Array<{ userId: string; payload: Record<string, unknown> }> = [];
+
+    for (const [playerId, earned] of newlyEarned.entries()) {
+      const cleanId = sanitizeId(playerId);
+      if (!cleanId) continue;
+      const existing = params.existingStatsMap.get(cleanId);
+      if (existing?.medalsThroughWeek && existing.medalsThroughWeek >= previousWeekKey) {
+        continue;
+      }
+
+      const nextGold = Math.min(1000, (existing?.pastGold || 0) + earned.gold);
+      const nextSilver = Math.min(1000, (existing?.pastSilver || 0) + earned.silver);
+      const nextBronze = Math.min(1000, (existing?.pastBronze || 0) + earned.bronze);
+
+      if (existing) {
+        updatedStats.push({
+          ...existing,
+          pastGold: nextGold,
+          pastSilver: nextSilver,
+          pastBronze: nextBronze,
+          medalsThroughWeek: previousWeekKey,
+          updatedAt: nowIso
+        });
+        writeOps.push({
+          userId: cleanId,
+          payload: {
+            pastGold: nextGold,
+            pastSilver: nextSilver,
+            pastBronze: nextBronze,
+            medalsThroughWeek: previousWeekKey,
+            updatedAt: serverTimestamp()
+          }
+        });
+      } else {
+        const freshStats: UserStats = {
+          userId: cleanId,
+          currentStreak: 0,
+          bestStreak: 0,
+          totalAttemptsAllTime: 0,
+          bestScoreThisWeek: 0,
+          pastGold: nextGold,
+          pastSilver: nextSilver,
+          pastBronze: nextBronze,
+          medalsThroughWeek: previousWeekKey,
+          updatedAt: nowIso
+        };
+        updatedStats.push(freshStats);
+        writeOps.push({
+          userId: cleanId,
+          payload: {
+            userId: cleanId,
+            currentStreak: 0,
+            bestStreak: 0,
+            totalAttemptsAllTime: 0,
+            bestScoreThisWeek: 0,
+            pastGold: nextGold,
+            pastSilver: nextSilver,
+            pastBronze: nextBronze,
+            medalsThroughWeek: previousWeekKey,
+            updatedAt: serverTimestamp()
+          }
+        });
+      }
+    }
+
+    for (let i = 0; i < writeOps.length; i += 400) {
+      const chunk = writeOps.slice(i, i + 400);
+      const batch = writeBatch(db);
+      for (const op of chunk) {
+        batch.set(doc(db, 'user_stats', op.userId), op.payload, { merge: true });
+      }
+      await batch.commit();
+    }
+
+    if (params.configExists) {
+      await setDoc(
+        doc(db, 'team_meta', 'quiz_config'),
+        {
+          medalsFinalizedThroughWeek: previousWeekKey,
+          updatedAt: serverTimestamp()
+        },
+        { merge: true }
+      );
+    } else {
+      await setDoc(doc(db, 'team_meta', 'quiz_config'), {
+        questionCount: DEFAULT_QUIZ_CONFIG.questionCount,
+        timePerQuestionSeconds: DEFAULT_QUIZ_CONFIG.timePerQuestionSeconds,
+        prioritizeFocusQuestions: DEFAULT_QUIZ_CONFIG.prioritizeFocusQuestions,
+        ensureDiverseTopics: DEFAULT_QUIZ_CONFIG.ensureDiverseTopics,
+        medalsFinalizedThroughWeek: previousWeekKey,
+        updatedAt: serverTimestamp()
+      });
+    }
+
+    return {
+      updatedStats,
+      medalsFinalizedThroughWeek: previousWeekKey
+    };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, 'user_stats');
+    return null;
+  }
+}
+
 export async function migrateAllUserAggregatesInFirestore(
-  players: Player[]
+  players: Player[],
+  configExists = true
 ): Promise<{
   updatedPlayersCount: number;
   processedAttemptsCount: number;
   statsMap: Map<string, UserStats>;
   detailsMap: Map<string, UserDetails>;
+  medalsFinalizedThroughWeek: string;
 }> {
   let allAttempts: QuizAttempt[] = [];
   try {
@@ -1155,6 +1317,15 @@ export async function migrateAllUserAggregatesInFirestore(
     new Set(players.map(p => sanitizeId(p.id)).filter(Boolean))
   );
 
+  const currentWeekKey = getWeekKey();
+  const previousWeekKey = getPreviousWeekKey();
+  const pastMedalsMap = calculateCompletedWeekMedals(
+    allAttempts,
+    undefined,
+    previousWeekKey,
+    targetUserIds.length > 0 ? new Set(targetUserIds) : undefined
+  );
+
   const statsMap = new Map<string, UserStats>();
   const detailsMap = new Map<string, UserDetails>();
   const entries: Array<{ userId: string; stats: UserStats; details: UserDetails }> = [];
@@ -1162,8 +1333,16 @@ export async function migrateAllUserAggregatesInFirestore(
 
   for (const userId of targetUserIds) {
     const playerAttempts = attemptsByPlayer.get(userId) || [];
-    const stats = buildUserStatsFromAttempts(userId, playerAttempts);
-    const details = buildUserDetailsFromAttempts(userId, playerAttempts);
+    const baseStats = buildUserStatsFromAttempts(userId, playerAttempts, currentWeekKey);
+    const pastMedals = pastMedalsMap.get(userId);
+    const stats: UserStats = {
+      ...baseStats,
+      pastGold: pastMedals?.gold || 0,
+      pastSilver: pastMedals?.silver || 0,
+      pastBronze: pastMedals?.bronze || 0,
+      medalsThroughWeek: previousWeekKey
+    };
+    const details = buildUserDetailsFromAttempts(userId, playerAttempts, currentWeekKey);
     statsMap.set(userId, { ...stats, updatedAt: nowIso });
     detailsMap.set(userId, { ...details, updatedAt: nowIso });
     entries.push({ userId, stats, details });
@@ -1190,11 +1369,36 @@ export async function migrateAllUserAggregatesInFirestore(
     }
   }
 
+  try {
+    if (configExists) {
+      await setDoc(
+        doc(db, 'team_meta', 'quiz_config'),
+        {
+          medalsFinalizedThroughWeek: previousWeekKey,
+          updatedAt: serverTimestamp()
+        },
+        { merge: true }
+      );
+    } else {
+      await setDoc(doc(db, 'team_meta', 'quiz_config'), {
+        questionCount: DEFAULT_QUIZ_CONFIG.questionCount,
+        timePerQuestionSeconds: DEFAULT_QUIZ_CONFIG.timePerQuestionSeconds,
+        prioritizeFocusQuestions: DEFAULT_QUIZ_CONFIG.prioritizeFocusQuestions,
+        ensureDiverseTopics: DEFAULT_QUIZ_CONFIG.ensureDiverseTopics,
+        medalsFinalizedThroughWeek: previousWeekKey,
+        updatedAt: serverTimestamp()
+      });
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, 'team_meta/quiz_config');
+  }
+
   return {
     updatedPlayersCount: entries.length,
     processedAttemptsCount: allAttempts.length,
     statsMap,
-    detailsMap
+    detailsMap,
+    medalsFinalizedThroughWeek: previousWeekKey
   };
 }
 

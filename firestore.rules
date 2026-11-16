@@ -122,7 +122,7 @@ service cloud.firestore {
 
     function isValidQuizConfig(data) {
       return data.keys().hasAll(['questionCount', 'timePerQuestionSeconds', 'prioritizeFocusQuestions', 'ensureDiverseTopics', 'updatedAt'])
-        && data.keys().hasOnly(['questionCount', 'timePerQuestionSeconds', 'prioritizeFocusQuestions', 'ensureDiverseTopics', 'selectedTags', 'topicLabels', 'deletedQuestionIds', 'updatedAt'])
+        && data.keys().hasOnly(['questionCount', 'timePerQuestionSeconds', 'prioritizeFocusQuestions', 'ensureDiverseTopics', 'selectedTags', 'topicLabels', 'deletedQuestionIds', 'medalsFinalizedThroughWeek', 'updatedAt'])
         && data.questionCount is int && data.questionCount >= 1 && data.questionCount <= 25
         && data.timePerQuestionSeconds is int && data.timePerQuestionSeconds >= 5 && data.timePerQuestionSeconds <= 120
         && data.prioritizeFocusQuestions is bool
@@ -130,12 +130,13 @@ service cloud.firestore {
         && (!('selectedTags' in data) || (data.selectedTags is list && data.selectedTags.size() <= 20))
         && (!('topicLabels' in data) || (data.topicLabels is list && data.topicLabels.size() <= 30 && (data.topicLabels.size() == 0 || data.topicLabels[0] is string)))
         && (!('deletedQuestionIds' in data) || (data.deletedQuestionIds is list && data.deletedQuestionIds.size() <= 100 && (data.deletedQuestionIds.size() == 0 || data.deletedQuestionIds[0] is string)))
+        && (!('medalsFinalizedThroughWeek' in data) || (data.medalsFinalizedThroughWeek is string && data.medalsFinalizedThroughWeek.size() <= 16 && data.medalsFinalizedThroughWeek.matches('^[0-9]{4}-W[0-9]{2}$')))
         && data.updatedAt is timestamp;
     }
 
     function isValidUserStats(data, userId) {
       return data.keys().hasAll(['userId', 'currentStreak', 'bestStreak', 'totalAttemptsAllTime', 'bestScoreThisWeek', 'updatedAt'])
-        && data.keys().hasOnly(['userId', 'currentStreak', 'bestStreak', 'totalAttemptsAllTime', 'attemptsThisWeek', 'currentWeekKey', 'bestScoreThisWeek', 'bestScoreAllTime', 'updatedAt'])
+        && data.keys().hasOnly(['userId', 'currentStreak', 'bestStreak', 'totalAttemptsAllTime', 'attemptsThisWeek', 'currentWeekKey', 'bestScoreThisWeek', 'bestScoreAllTime', 'pastGold', 'pastSilver', 'pastBronze', 'medalsThroughWeek', 'updatedAt'])
         && data.userId is string && data.userId == userId && data.userId.size() <= 128
         && data.currentStreak is int && data.currentStreak >= 0 && data.currentStreak <= 1000
         && data.bestStreak is int && data.bestStreak >= 0 && data.bestStreak <= 1000
@@ -144,6 +145,10 @@ service cloud.firestore {
         && (!('currentWeekKey' in data) || (data.currentWeekKey is string && data.currentWeekKey.size() <= 16 && data.currentWeekKey.matches('^[0-9]{4}-W[0-9]{2}$')))
         && data.bestScoreThisWeek is number && data.bestScoreThisWeek >= 0 && data.bestScoreThisWeek <= 3600
         && (!('bestScoreAllTime' in data) || (data.bestScoreAllTime is number && data.bestScoreAllTime >= 0 && data.bestScoreAllTime <= 3600))
+        && (!('pastGold' in data) || (data.pastGold is int && data.pastGold >= 0 && data.pastGold <= 1000))
+        && (!('pastSilver' in data) || (data.pastSilver is int && data.pastSilver >= 0 && data.pastSilver <= 1000))
+        && (!('pastBronze' in data) || (data.pastBronze is int && data.pastBronze >= 0 && data.pastBronze <= 1000))
+        && (!('medalsThroughWeek' in data) || (data.medalsThroughWeek is string && data.medalsThroughWeek.size() <= 16 && data.medalsThroughWeek.matches('^[0-9]{4}-W[0-9]{2}$')))
         && data.updatedAt is timestamp;
     }
 
@@ -318,7 +323,7 @@ service cloud.firestore {
       allow update: if isCoach() && isValidId(metaId) && metaId == 'quiz_config'
         && isValidQuizConfig(incoming())
         && incoming().updatedAt == request.time
-        && incoming().diff(existing()).affectedKeys().hasOnly(['questionCount', 'timePerQuestionSeconds', 'prioritizeFocusQuestions', 'ensureDiverseTopics', 'selectedTags', 'topicLabels', 'deletedQuestionIds', 'updatedAt']);
+        && incoming().diff(existing()).affectedKeys().hasOnly(['questionCount', 'timePerQuestionSeconds', 'prioritizeFocusQuestions', 'ensureDiverseTopics', 'selectedTags', 'topicLabels', 'deletedQuestionIds', 'medalsFinalizedThroughWeek', 'updatedAt']);
 
       allow delete: if false;
     }

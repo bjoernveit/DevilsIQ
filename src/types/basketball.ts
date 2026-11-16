@@ -97,6 +97,7 @@ export interface QuizConfig {
   selectedTags?: string[];
   topicLabels?: string[];
   deletedQuestionIds?: string[];
+  medalsFinalizedThroughWeek?: string;
 }
 
 export interface Team {
@@ -132,6 +133,10 @@ export interface UserStats {
   currentWeekKey?: string;
   bestScoreThisWeek: number;
   bestScoreAllTime?: number;
+  pastGold?: number;
+  pastSilver?: number;
+  pastBronze?: number;
+  medalsThroughWeek?: string;
   updatedAt?: string;
 }
 

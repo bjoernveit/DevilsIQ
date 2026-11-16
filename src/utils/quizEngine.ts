@@ -61,6 +61,15 @@ export function getWeekKey(dateInput: Date | string = new Date()): string {
 }
 
 /**
+ * Returns the ISO week key immediately preceding the week of `dateInput`.
+ */
+export function getPreviousWeekKey(dateInput: Date | string = new Date()): string {
+  const d = new Date(dateInput);
+  d.setDate(d.getDate() - 7);
+  return getWeekKey(d);
+}
+
+/**
  * Generates a randomized quiz session with safeguards:
  * 1. Strictly no duplicates within the session.
  * 2. Balances multiple tags/topics so questions aren't all from a single concept.
@@ -336,6 +345,74 @@ export interface PlayerMedals {
   bronze: number;
 }
 
+function awardTopThreeMedalsForAttempts(
+  weekAttempts: QuizAttempt[],
+  medalsByPlayer: Map<string, PlayerMedals>
+): void {
+  const bestByPlayer = new Map<string, { bestTime: number; earliestTimestamp: number }>();
+
+  for (const att of weekAttempts) {
+    const time = Math.round(att.totalTimeSeconds * 10) / 10;
+    const ts = new Date(att.timestamp).getTime();
+    const existing = bestByPlayer.get(att.playerId);
+
+    if (
+      !existing ||
+      time < existing.bestTime ||
+      (time === existing.bestTime && ts < existing.earliestTimestamp)
+    ) {
+      bestByPlayer.set(att.playerId, { bestTime: time, earliestTimestamp: ts });
+    }
+  }
+
+  const ranked = Array.from(bestByPlayer.entries()).sort(([idA, a], [idB, b]) => {
+    if (a.bestTime !== b.bestTime) return a.bestTime - b.bestTime;
+    if (a.earliestTimestamp !== b.earliestTimestamp) return a.earliestTimestamp - b.earliestTimestamp;
+    return idA.localeCompare(idB);
+  });
+
+  const medalKeys: Array<keyof PlayerMedals> = ['gold', 'silver', 'bronze'];
+  for (let i = 0; i < Math.min(3, ranked.length); i++) {
+    const playerId = ranked[i][0];
+    const current = medalsByPlayer.get(playerId) || { gold: 0, silver: 0, bronze: 0 };
+    current[medalKeys[i]] += 1;
+    medalsByPlayer.set(playerId, current);
+  }
+}
+
+/**
+ * Calculates Gold, Silver, and Bronze medals earned for completed weeks in
+ * `(afterWeekExclusive, upToWeekInclusive]`.
+ */
+export function calculateCompletedWeekMedals(
+  attempts: QuizAttempt[],
+  afterWeekExclusive: string | undefined,
+  upToWeekInclusive: string,
+  validPlayerIds?: Set<string>
+): Map<string, PlayerMedals> {
+  const medalsByPlayer = new Map<string, PlayerMedals>();
+  const passedByWeek = new Map<string, QuizAttempt[]>();
+
+  for (const att of attempts) {
+    if (!att.weekKey) continue;
+    if (afterWeekExclusive && att.weekKey <= afterWeekExclusive) continue;
+    if (att.weekKey > upToWeekInclusive) continue;
+    if (validPlayerIds && !validPlayerIds.has(att.playerId)) continue;
+    const isPassed = att.passed === true || att.correctCount === att.totalQuestions;
+    if (!isPassed) continue;
+
+    const list = passedByWeek.get(att.weekKey) || [];
+    list.push(att);
+    passedByWeek.set(att.weekKey, list);
+  }
+
+  for (const weekAttempts of passedByWeek.values()) {
+    awardTopThreeMedalsForAttempts(weekAttempts, medalsByPlayer);
+  }
+
+  return medalsByPlayer;
+}
+
 /**
  * Calculates Gold (1st), Silver (2nd), and Bronze (3rd) weekly medals earned by each player
  * across all completed weeks plus the currently active week's live top 3
@@ -362,50 +439,77 @@ export function calculatePlayerMedals(
   }
 
   for (const weekAttempts of passedByWeek.values()) {
-    const bestByPlayer = new Map<string, { bestTime: number; earliestTimestamp: number }>();
+    awardTopThreeMedalsForAttempts(weekAttempts, medalsByPlayer);
+  }
 
-    for (const att of weekAttempts) {
-      const time = Math.round(att.totalTimeSeconds * 10) / 10;
-      const ts = new Date(att.timestamp).getTime();
-      const existing = bestByPlayer.get(att.playerId);
+  // When attempts are not loaded, combine accumulated past medals from userStatsMap
+  // with any unfinalized past-week standings and live current-week top 3 standings.
+  if (attempts.length === 0 && userStatsMap && userStatsMap.size > 0) {
+    let maxFinalizedWeek = '';
 
-      if (
-        !existing ||
-        time < existing.bestTime ||
-        (time === existing.bestTime && ts < existing.earliestTimestamp)
-      ) {
-        bestByPlayer.set(att.playerId, { bestTime: time, earliestTimestamp: ts });
+    for (const [playerId, s] of userStatsMap.entries()) {
+      if (validPlayerIds && !validPlayerIds.has(playerId)) continue;
+      if (s.medalsThroughWeek && s.medalsThroughWeek > maxFinalizedWeek) {
+        maxFinalizedWeek = s.medalsThroughWeek;
+      }
+      const pastGold = s.pastGold || 0;
+      const pastSilver = s.pastSilver || 0;
+      const pastBronze = s.pastBronze || 0;
+      if (pastGold > 0 || pastSilver > 0 || pastBronze > 0) {
+        medalsByPlayer.set(playerId, {
+          gold: pastGold,
+          silver: pastSilver,
+          bronze: pastBronze
+        });
       }
     }
 
-    const ranked = Array.from(bestByPlayer.entries()).sort(([idA, a], [idB, b]) => {
-      if (a.bestTime !== b.bestTime) return a.bestTime - b.bestTime;
-      if (a.earliestTimestamp !== b.earliestTimestamp) return a.earliestTimestamp - b.earliestTimestamp;
-      return idA.localeCompare(idB);
-    });
+    // Provisional unfinalized past week(s) standing (e.g. Monday morning before coach logs in)
+    const unfinalizedPastByWeek = new Map<string, Array<[string, UserStats]>>();
+    for (const [playerId, s] of userStatsMap.entries()) {
+      if (validPlayerIds && !validPlayerIds.has(playerId)) continue;
+      if (!s.currentWeekKey || s.currentWeekKey >= currentWeekKey) continue;
+      if (s.bestScoreThisWeek <= 0) continue;
+      const effectiveThrough = s.medalsThroughWeek || maxFinalizedWeek;
+      if (effectiveThrough && s.currentWeekKey <= effectiveThrough) continue;
+
+      const list = unfinalizedPastByWeek.get(s.currentWeekKey) || [];
+      list.push([playerId, s]);
+      unfinalizedPastByWeek.set(s.currentWeekKey, list);
+    }
 
     const medalKeys: Array<keyof PlayerMedals> = ['gold', 'silver', 'bronze'];
-    for (let i = 0; i < Math.min(3, ranked.length); i++) {
-      const playerId = ranked[i][0];
-      const current = medalsByPlayer.get(playerId) || { gold: 0, silver: 0, bronze: 0 };
-      current[medalKeys[i]] += 1;
-      medalsByPlayer.set(playerId, current);
+    for (const entries of unfinalizedPastByWeek.values()) {
+      const sortedPast = [...entries].sort(([idA, a], [idB, b]) => {
+        if (a.bestScoreThisWeek !== b.bestScoreThisWeek) {
+          return a.bestScoreThisWeek - b.bestScoreThisWeek;
+        }
+        return idA.localeCompare(idB);
+      });
+      for (let i = 0; i < Math.min(3, sortedPast.length); i++) {
+        const playerId = sortedPast[i][0];
+        const current = medalsByPlayer.get(playerId) || { gold: 0, silver: 0, bronze: 0 };
+        current[medalKeys[i]] += 1;
+        medalsByPlayer.set(playerId, current);
+      }
     }
-  }
 
-  // Fallback: If attempts have not been loaded, calculate current week medals directly from userStatsMap
-  if (medalsByPlayer.size === 0 && userStatsMap && userStatsMap.size > 0) {
-    const validStats = Array.from(userStatsMap.entries())
+    // Live non-permanent medals for the active current week
+    const validCurrentStats = Array.from(userStatsMap.entries())
       .filter(([id, s]) => {
         if (validPlayerIds && !validPlayerIds.has(id)) return false;
         const weekMatches = s.currentWeekKey ? s.currentWeekKey === currentWeekKey : currentWeekKey === getWeekKey();
         return weekMatches && s.bestScoreThisWeek > 0;
       })
-      .sort(([, a], [, b]) => a.bestScoreThisWeek - b.bestScoreThisWeek);
+      .sort(([idA, a], [idB, b]) => {
+        if (a.bestScoreThisWeek !== b.bestScoreThisWeek) {
+          return a.bestScoreThisWeek - b.bestScoreThisWeek;
+        }
+        return idA.localeCompare(idB);
+      });
 
-    const medalKeys: Array<keyof PlayerMedals> = ['gold', 'silver', 'bronze'];
-    for (let i = 0; i < Math.min(3, validStats.length); i++) {
-      const playerId = validStats[i][0];
+    for (let i = 0; i < Math.min(3, validCurrentStats.length); i++) {
+      const playerId = validCurrentStats[i][0];
       const current = medalsByPlayer.get(playerId) || { gold: 0, silver: 0, bronze: 0 };
       current[medalKeys[i]] += 1;
       medalsByPlayer.set(playerId, current);

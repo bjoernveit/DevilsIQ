@@ -73,6 +73,13 @@ import { PlayerDetailModal } from './components/PlayerDetailModal';
 import { QuizResultsModal } from './components/QuizResultsModal';
 import { QuizConfigModal } from './components/QuizConfigModal';
 import { PlayerLabel } from './components/PlayerLabel';
+import { UpdateBanner } from './components/UpdateBanner';
+import {
+  checkForNewAppVersion,
+  getCurrentAppVersion,
+  reloadToAppVersion,
+  stripVersionQueryParamFromUrl
+} from './utils/appVersion';
 import { Play, ClipboardList, SlidersHorizontal } from 'lucide-react';
 
 type TabType = 'quiz' | 'coach';
@@ -124,10 +131,56 @@ export default function App() {
 
   const [documentReadCount, setDocumentReadCount] = useState(0);
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [availableUpdateVersion, setAvailableUpdateVersion] = useState<string | null>(null);
+  const [dismissedUpdateVersion, setDismissedUpdateVersion] = useState<string | null>(null);
 
   useEffect(() => {
     const unsub = subscribeToReadCount(count => setDocumentReadCount(count));
     return () => unsub();
+  }, []);
+
+  // Check for newly deployed builds via cache-busted version.json on boot & foreground resume
+  useEffect(() => {
+    const cleanUrl = stripVersionQueryParamFromUrl(window.location.href);
+    if (cleanUrl) {
+      window.history.replaceState(null, '', cleanUrl);
+    }
+
+    const baseUrl = import.meta.env.BASE_URL || '/';
+    const currentVersion = getCurrentAppVersion();
+    let lastCheckedAt = 0;
+
+    const runCheck = async (force = false) => {
+      const now = Date.now();
+      if (!force && now - lastCheckedAt < 30_000) return;
+      lastCheckedAt = now;
+      const newerVersion = await checkForNewAppVersion(baseUrl, currentVersion);
+      if (newerVersion) {
+        setAvailableUpdateVersion(newerVersion);
+      }
+    };
+
+    void runCheck(true);
+
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'visible') {
+        void runCheck(false);
+      }
+    };
+
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        void runCheck(false);
+      }
+    }, 5 * 60_000);
+
+    return () => {
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+      window.clearInterval(intervalId);
+    };
   }, []);
 
   // Listen to Firebase Auth state
@@ -487,8 +540,23 @@ export default function App() {
     );
   }
 
+  const showUpdateBanner =
+    Boolean(availableUpdateVersion) && availableUpdateVersion !== dismissedUpdateVersion;
+
   if (!firebaseUser) {
-    return <AuthScreen notice={authNotice} onClearNotice={() => setAuthNotice(null)} />;
+    return (
+      <div className="min-h-screen bg-[#09090B] flex flex-col">
+        {showUpdateBanner && availableUpdateVersion && (
+          <UpdateBanner
+            onUpdate={() => reloadToAppVersion(availableUpdateVersion)}
+            onDismiss={() => setDismissedUpdateVersion(availableUpdateVersion)}
+          />
+        )}
+        <div className="flex-1">
+          <AuthScreen notice={authNotice} onClearNotice={() => setAuthNotice(null)} />
+        </div>
+      </div>
+    );
   }
 
   const fallbackPlayer: Player = {
@@ -806,6 +874,13 @@ export default function App() {
           />
         </button>
       </header>
+
+      {showUpdateBanner && !isQuizActive && availableUpdateVersion && (
+        <UpdateBanner
+          onUpdate={() => reloadToAppVersion(availableUpdateVersion)}
+          onDismiss={() => setDismissedUpdateVersion(availableUpdateVersion)}
+        />
+      )}
 
       {/* Main Content */}
       <main

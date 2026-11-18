@@ -5,6 +5,7 @@ import {
   validateUsername,
   isRegistrationRoute
 } from '../lib/firebase';
+import { trackEvent } from '../lib/analytics';
 
 interface AuthScreenProps {
   onAuthSuccess?: () => void;
@@ -74,11 +75,23 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, notice, o
     try {
       if (isRegisterMode) {
         await registerWithUsername(username, password);
+        trackEvent('sign_up_success', { method: 'username_password' });
       } else {
         await loginWithUsername(username, password);
+        trackEvent('login_success', { method: 'username_password' });
       }
       onAuthSuccess?.();
     } catch (err) {
+      const errorCode =
+        typeof err === 'object' && err !== null && 'code' in err
+          ? String((err as { code?: unknown }).code)
+          : err instanceof Error
+          ? err.name
+          : 'unknown';
+      trackEvent('auth_error', {
+        mode: isRegisterMode ? 'register' : 'login',
+        error_code: errorCode
+      });
       setError(getFriendlyAuthError(err, isRegisterMode ? 'register' : 'login'));
     } finally {
       setIsSubmitting(false);

@@ -8,6 +8,7 @@ import {
   PlayerMedals
 } from '../utils/quizEngine';
 import { PlayerLabel } from './PlayerLabel';
+import { trackEvent } from '../lib/analytics';
 import { Flame, Trophy } from 'lucide-react';
 
 interface LeaderboardViewProps {
@@ -87,7 +88,12 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
       {/* Board Type Selector Toggle */}
       <div className="flex items-center gap-1 p-1 bg-zinc-900 border border-zinc-800 rounded-xl w-fit">
         <button
-          onClick={() => setBoardType('weekly')}
+          onClick={() => {
+            if (boardType !== 'weekly') {
+              setBoardType('weekly');
+              trackEvent('leaderboard_view_switch', { tab: 'weekly' });
+            }
+          }}
           className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-colors min-h-[36px] ${
             boardType === 'weekly' ? 'bg-red-700 text-white shadow-xs' : 'text-zinc-400 hover:text-zinc-200'
           }`}
@@ -95,7 +101,12 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
           Diese Woche
         </button>
         <button
-          onClick={() => setBoardType('alltime')}
+          onClick={() => {
+            if (boardType !== 'alltime') {
+              setBoardType('alltime');
+              trackEvent('leaderboard_view_switch', { tab: 'alltime' });
+            }
+          }}
           className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-colors min-h-[36px] ${
             boardType === 'alltime' ? 'bg-red-700 text-white shadow-xs' : 'text-zinc-400 hover:text-zinc-200'
           }`}

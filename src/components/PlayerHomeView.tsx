@@ -2,6 +2,7 @@ import { Player, QuizAttempt, QuizConfig, Team, UserStats } from '../types/baske
 import { calculateWeeklyLeaderboard, getWeekKey, isPlayerOnline, PlayerMedals } from '../utils/quizEngine';
 import { LeaderboardView } from './LeaderboardView';
 import { PlayerLabel } from './PlayerLabel';
+import { trackEvent } from '../lib/analytics';
 import { Play, SlidersHorizontal, Check, Clock } from 'lucide-react';
 
 interface PlayerHomeViewProps {
@@ -83,7 +84,12 @@ export const PlayerHomeView: React.FC<PlayerHomeViewProps> = ({
               <button
                 key={team.id}
                 type="button"
-                onClick={() => onSelectTeamId(team.id)}
+                onClick={() => {
+                  if (team.id !== activeTeam?.id) {
+                    trackEvent('team_switch', { team_id: team.id });
+                  }
+                  onSelectTeamId(team.id);
+                }}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors min-h-[34px] whitespace-nowrap ${
                   activeTeam?.id === team.id
                     ? 'bg-red-700 text-white'

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Question, QuizOption, QuizAttempt, QuizAttemptAnswer, Player } from '../types/basketball';
 import { getWeekKey, getOptionDisplayText } from '../utils/quizEngine';
 import { playBuzzer, playSwish } from '../utils/audio';
+import { trackEvent } from '../lib/analytics';
 import { Timer, Check, X, Volume2, VolumeX } from 'lucide-react';
 
 interface QuizSessionProps {
@@ -224,7 +225,14 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
 
           <button
             type="button"
-            onClick={onExit}
+            onClick={() => {
+              trackEvent('quiz_abort', {
+                stage: 'countdown',
+                question_index: 0,
+                total_questions: questions.length
+              });
+              onExit();
+            }}
             className="px-4 py-2 rounded-xl border border-zinc-800 bg-zinc-950 hover:bg-zinc-800 text-xs font-medium text-zinc-400 hover:text-white min-h-[40px] transition-colors"
           >
             Abbrechen
@@ -258,7 +266,11 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
             </span>
 
             <button
-              onClick={() => setSoundEnabled(!soundEnabled)}
+              onClick={() => {
+                const nextSound = !soundEnabled;
+                setSoundEnabled(nextSound);
+                trackEvent('quiz_sound_toggle', { enabled: nextSound });
+              }}
               className="p-1.5 text-zinc-400 hover:text-white rounded-lg min-h-[34px] min-w-[34px] sm:min-h-[36px] sm:min-w-[36px] flex items-center justify-center transition-colors"
               aria-label={soundEnabled ? 'Ton stummschalten' : 'Ton aktivieren'}
             >
@@ -266,7 +278,14 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
             </button>
 
             <button
-              onClick={onExit}
+              onClick={() => {
+                trackEvent('quiz_abort', {
+                  stage: 'in_progress',
+                  question_index: currentIndex + 1,
+                  total_questions: questions.length
+                });
+                onExit();
+              }}
               className="text-zinc-400 hover:text-white min-h-[34px] sm:min-h-[36px] px-1.5 font-medium transition-colors"
             >
               Beenden

@@ -54,7 +54,15 @@ import {
   readAggregatesCache
 } from '../utils/aggregatesCache';
 
-const app = initializeApp(firebaseConfig);
+const envMeasurementId =
+  typeof import.meta !== 'undefined' && import.meta.env?.VITE_GA_MEASUREMENT_ID
+    ? String(import.meta.env.VITE_GA_MEASUREMENT_ID).trim()
+    : '';
+const resolvedFirebaseConfig = envMeasurementId
+  ? { ...firebaseConfig, measurementId: envMeasurementId }
+  : firebaseConfig;
+
+export const app = initializeApp(resolvedFirebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
 export const QUESTIONS_CACHE_KEY = getQuestionsCacheKey(

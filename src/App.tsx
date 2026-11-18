@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { Timestamp, collection, doc, getDoc, getDocs, onSnapshot, query, where } from 'firebase/firestore';
 import { Player, Question, QuizAttempt, QuizConfig, Team, UserStats, UserDetails } from './types/basketball';
@@ -80,6 +80,7 @@ import {
   reloadToAppVersion,
   stripVersionQueryParamFromUrl
 } from './utils/appVersion';
+import { setAnalyticsUserContext, trackEvent } from './lib/analytics';
 import { Play, ClipboardList, SlidersHorizontal } from 'lucide-react';
 
 type TabType = 'quiz' | 'coach';
@@ -133,10 +134,15 @@ export default function App() {
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [availableUpdateVersion, setAvailableUpdateVersion] = useState<string | null>(null);
   const [dismissedUpdateVersion, setDismissedUpdateVersion] = useState<string | null>(null);
+  const shownUpdateBannerRef = useRef<string | null>(null);
 
   useEffect(() => {
     const unsub = subscribeToReadCount(count => setDocumentReadCount(count));
     return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    trackEvent('app_open');
   }, []);
 
   // Check for newly deployed builds via cache-busted version.json on boot & foreground resume
@@ -532,6 +538,31 @@ export default function App() {
     return calculatePlayerMedals(attempts, currentWeekKey, validIds, userStatsMap);
   }, [attempts, currentWeekKey, players, userStatsMap]);
 
+  const showUpdateBanner =
+    Boolean(availableUpdateVersion) && availableUpdateVersion !== dismissedUpdateVersion;
+
+  useEffect(() => {
+    if (!authReady) return;
+    if (!firebaseUser) {
+      setAnalyticsUserContext('guest');
+      return;
+    }
+    if (!profileReady) return;
+    setAnalyticsUserContext(currentPlayerRole === 'coach' ? 'coach' : 'player');
+  }, [authReady, firebaseUser, profileReady, currentPlayerRole]);
+
+  useEffect(() => {
+    if (
+      showUpdateBanner &&
+      availableUpdateVersion &&
+      !isQuizActive &&
+      shownUpdateBannerRef.current !== availableUpdateVersion
+    ) {
+      shownUpdateBannerRef.current = availableUpdateVersion;
+      trackEvent('update_banner_shown', { new_version: availableUpdateVersion });
+    }
+  }, [showUpdateBanner, availableUpdateVersion, isQuizActive]);
+
   if (!authReady || (firebaseUser && !profileReady)) {
     return (
       <div className="min-h-screen bg-[#09090B] flex items-center justify-center text-xs text-zinc-400">
@@ -540,16 +571,19 @@ export default function App() {
     );
   }
 
-  const showUpdateBanner =
-    Boolean(availableUpdateVersion) && availableUpdateVersion !== dismissedUpdateVersion;
-
   if (!firebaseUser) {
     return (
       <div className="min-h-screen bg-[#09090B] flex flex-col">
         {showUpdateBanner && availableUpdateVersion && (
           <UpdateBanner
-            onUpdate={() => reloadToAppVersion(availableUpdateVersion)}
-            onDismiss={() => setDismissedUpdateVersion(availableUpdateVersion)}
+            onUpdate={() => {
+              trackEvent('update_banner_clicked', { new_version: availableUpdateVersion });
+              reloadToAppVersion(availableUpdateVersion);
+            }}
+            onDismiss={() => {
+              trackEvent('update_banner_dismissed', { new_version: availableUpdateVersion });
+              setDismissedUpdateVersion(availableUpdateVersion);
+            }}
           />
         )}
         <div className="flex-1">
@@ -628,6 +662,11 @@ export default function App() {
     setActiveQuizTimeSeconds(effectivePlayerConfig.timePerQuestionSeconds);
     setIsQuizActive(true);
     setNowMs(Date.now());
+    trackEvent('quiz_start', {
+      team_id: activePlayerTeam.id,
+      question_count: sessionQuestions.length,
+      time_per_question: effectivePlayerConfig.timePerQuestionSeconds
+    });
     void markRoundStartedInFirestore(firebaseUser.uid).catch(() => {});
   };
 
@@ -640,6 +679,24 @@ export default function App() {
     setLatestAttempt(normalizedAttempt);
     setIsQuizActive(false);
     setIsResultsOpen(true);
+
+    const passed = normalizedAttempt.passed ?? (normalizedAttempt.correctCount === normalizedAttempt.totalQuestions);
+    const lastAnswer = normalizedAttempt.answers[normalizedAttempt.answers.length - 1];
+    const failReason = passed
+      ? 'none'
+      : lastAnswer?.selectedOptionId === 'TIME_EXPIRED'
+      ? 'timeout'
+      : 'wrong_answer';
+    trackEvent('quiz_complete', {
+      team_id: activeQuizTeamId,
+      passed,
+      fail_reason: failReason,
+      correct_count: normalizedAttempt.correctCount,
+      total_questions: normalizedAttempt.totalQuestions,
+      total_time_seconds: normalizedAttempt.totalTimeSeconds,
+      max_streak: normalizedAttempt.maxStreak
+    });
+
     const updatedAggregates = await saveAttemptToFirestore(
       normalizedAttempt,
       userStatsMap.get(firebaseUser.uid)
@@ -778,6 +835,10 @@ export default function App() {
     if (!isCoach && player.id !== currentPlayer.id) {
       return;
     }
+    trackEvent('player_detail_open', {
+      is_own_profile: player.id === currentPlayer.id,
+      viewer_role: currentPlayer.role || 'player'
+    });
     setSelectedPlayerForDetail(player);
     setIsPlayerDetailOpen(true);
   };
@@ -877,8 +938,14 @@ export default function App() {
 
       {showUpdateBanner && !isQuizActive && availableUpdateVersion && (
         <UpdateBanner
-          onUpdate={() => reloadToAppVersion(availableUpdateVersion)}
-          onDismiss={() => setDismissedUpdateVersion(availableUpdateVersion)}
+          onUpdate={() => {
+            trackEvent('update_banner_clicked', { new_version: availableUpdateVersion });
+            reloadToAppVersion(availableUpdateVersion);
+          }}
+          onDismiss={() => {
+            trackEvent('update_banner_dismissed', { new_version: availableUpdateVersion });
+            setDismissedUpdateVersion(availableUpdateVersion);
+          }}
         />
       )}
 
@@ -1188,10 +1255,16 @@ export default function App() {
         isOpen={isResultsOpen}
         onClose={() => setIsResultsOpen(false)}
         onRetake={() => {
+          trackEvent('quiz_retake_click', {
+            previous_passed: Boolean(latestAttempt?.passed)
+          });
           setIsResultsOpen(false);
           handleStartQuiz();
         }}
         onGoToLeaderboard={() => {
+          trackEvent('results_to_leaderboard_click', {
+            previous_passed: Boolean(latestAttempt?.passed)
+          });
           setIsResultsOpen(false);
           setActiveTab('quiz');
         }}

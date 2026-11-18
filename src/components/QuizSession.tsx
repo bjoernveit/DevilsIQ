@@ -242,10 +242,24 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
     );
   }
 
+  const visualRowClassMap: Record<number, string> = {
+    1: 'grid-rows-1',
+    2: 'grid-rows-2',
+    3: 'grid-rows-3',
+    4: 'grid-rows-4',
+    5: 'grid-rows-5',
+    6: 'grid-rows-6'
+  };
+  const visualRowsClass = visualRowClassMap[shuffledOptions.length] || 'grid-rows-4';
+
   return (
-    <div className="max-w-xl mx-auto px-3 sm:px-4 py-2 sm:py-4 flex flex-col gap-2.5 sm:gap-4">
+    <div
+      className={`w-full ${
+        hasVisualOptions ? 'max-w-2xl flex-1 min-h-0 h-full' : 'max-w-xl'
+      } mx-auto px-2.5 sm:px-4 py-2 sm:py-3 flex flex-col gap-2 sm:gap-3`}
+    >
       {/* Top Quiz HUD */}
-      <div className="space-y-2 sm:space-y-3">
+      <div className="shrink-0 space-y-1.5 sm:space-y-2.5">
         <div className="flex items-center justify-between text-xs text-zinc-400">
           <div className="flex items-center gap-2">
             <span className="font-mono font-semibold text-white">
@@ -303,8 +317,14 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
       </div>
 
       {/* Question Card */}
-      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-3.5 sm:p-5 space-y-2.5 sm:space-y-4">
-        <div className="space-y-1 sm:space-y-1.5">
+      <div
+        className={`bg-zinc-900 border border-zinc-800 rounded-2xl ${
+          hasVisualOptions
+            ? 'p-2.5 sm:p-4 flex-1 min-h-0 flex flex-col gap-2 sm:gap-3'
+            : 'p-3.5 sm:p-5 space-y-2.5 sm:space-y-4'
+        }`}
+      >
+        <div className="shrink-0 space-y-1 sm:space-y-1.5">
           {currentQuestion.tags.length > 0 && (
             <div className="text-[11px] sm:text-xs text-zinc-400 leading-tight">
               {currentQuestion.tags.join(' · ')}
@@ -317,18 +337,34 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
 
         {/* Question Image */}
         {currentQuestion.imageUrl && (
-          <div className="rounded-xl overflow-hidden border border-zinc-800 max-h-[24vh] sm:max-h-60 bg-black">
+          <div
+            className={`shrink-0 rounded-xl overflow-hidden border border-zinc-800 bg-black ${
+              hasVisualOptions
+                ? 'max-h-[16dvh] sm:max-h-[20dvh]'
+                : 'max-h-[24vh] sm:max-h-60'
+            }`}
+          >
             <img
               src={currentQuestion.imageUrl}
               alt={currentQuestion.scenario || currentQuestion.title}
               referrerPolicy="no-referrer"
-              className="w-full h-full object-contain max-h-[24vh] sm:max-h-60"
+              className={`w-full h-full object-contain ${
+                hasVisualOptions
+                  ? 'max-h-[16dvh] sm:max-h-[20dvh]'
+                  : 'max-h-[24vh] sm:max-h-60'
+              }`}
             />
           </div>
         )}
 
         {/* Answer Options (Text and/or Image) */}
-        <div className={hasVisualOptions ? 'grid grid-cols-2 gap-2 sm:gap-2.5 pt-0.5' : 'space-y-2 sm:space-y-2.5 pt-0.5'}>
+        <div
+          className={
+            hasVisualOptions
+              ? `flex-1 min-h-0 grid grid-cols-1 ${visualRowsClass} gap-1.5 sm:gap-2.5`
+              : 'space-y-2 sm:space-y-2.5 pt-0.5'
+          }
+        >
           {shuffledOptions.map(opt => {
             const isSelected = selectedOptionId === opt.id;
             const isCorrect = opt.isCorrect;
@@ -345,6 +381,61 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
               }
             }
 
+            if (hasVisualOptions) {
+              return (
+                <button
+                  key={opt.id}
+                  disabled={hasSubmittedAnswer}
+                  onClick={() => handleSelectOption(opt)}
+                  className={`relative w-full h-full min-h-0 min-w-0 text-left ${
+                    opt.imageUrl ? 'p-1.5 sm:p-2' : 'p-2.5 sm:p-3.5'
+                  } rounded-xl border transition-colors flex flex-col justify-center gap-1 sm:gap-1.5 overflow-hidden ${cardStyle}`}
+                >
+                  {(displayText || (!opt.imageUrl && hasSubmittedAnswer && (isCorrect || isSelected))) && (
+                    <div className="shrink-0 flex items-center justify-between gap-2 sm:gap-3 w-full px-1">
+                      {displayText ? (
+                        <span className="flex-1 text-[13px] sm:text-sm font-medium leading-tight line-clamp-2">
+                          {displayText}
+                        </span>
+                      ) : (
+                        <span className="flex-1" />
+                      )}
+
+                      {hasSubmittedAnswer && (
+                        <span className="shrink-0">
+                          {isCorrect ? (
+                            <Check className="w-4 h-4 text-emerald-400" />
+                          ) : isSelected ? (
+                            <X className="w-4 h-4 text-red-400" />
+                          ) : null}
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  {opt.imageUrl && (
+                    <div className="relative flex-1 min-h-0 min-w-0 w-full rounded-lg overflow-hidden border border-zinc-800/80 bg-black">
+                      <img
+                        src={opt.imageUrl}
+                        alt={displayText || 'Antwortbild'}
+                        referrerPolicy="no-referrer"
+                        className="absolute inset-0 w-full h-full object-contain"
+                      />
+                      {!displayText && hasSubmittedAnswer && (isCorrect || isSelected) && (
+                        <span className="absolute top-1.5 right-1.5 p-1 rounded-full bg-black/85 border border-zinc-700/80">
+                          {isCorrect ? (
+                            <Check className="w-4 h-4 text-emerald-400" />
+                          ) : (
+                            <X className="w-4 h-4 text-red-400" />
+                          )}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </button>
+              );
+            }
+
             return (
               <button
                 key={opt.id}
@@ -352,38 +443,21 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
                 onClick={() => handleSelectOption(opt)}
                 className={`w-full text-left p-2.5 sm:p-3.5 rounded-xl border transition-colors flex flex-col justify-center gap-1.5 sm:gap-2.5 min-h-[44px] sm:min-h-[52px] ${cardStyle}`}
               >
-                {(displayText || (hasSubmittedAnswer && (isCorrect || isSelected))) && (
-                  <div className="flex items-center justify-between gap-2 sm:gap-3 w-full">
-                    {displayText ? (
-                      <span className="flex-1 text-[13px] sm:text-sm font-medium leading-snug">
-                        {displayText}
-                      </span>
-                    ) : (
-                      <span className="flex-1" />
-                    )}
+                <div className="flex items-center justify-between gap-2 sm:gap-3 w-full">
+                  <span className="flex-1 text-[13px] sm:text-sm font-medium leading-snug">
+                    {displayText}
+                  </span>
 
-                    {hasSubmittedAnswer && (
-                      <span className="shrink-0">
-                        {isCorrect ? (
-                          <Check className="w-4 h-4 text-emerald-400" />
-                        ) : isSelected ? (
-                          <X className="w-4 h-4 text-red-400" />
-                        ) : null}
-                      </span>
-                    )}
-                  </div>
-                )}
-
-                {opt.imageUrl && (
-                  <div className="w-full rounded-lg overflow-hidden border border-zinc-800 max-h-24 sm:max-h-36 bg-black">
-                    <img
-                      src={opt.imageUrl}
-                      alt={displayText || 'Antwortbild'}
-                      referrerPolicy="no-referrer"
-                      className="w-full h-full object-contain max-h-24 sm:max-h-36"
-                    />
-                  </div>
-                )}
+                  {hasSubmittedAnswer && (
+                    <span className="shrink-0">
+                      {isCorrect ? (
+                        <Check className="w-4 h-4 text-emerald-400" />
+                      ) : isSelected ? (
+                        <X className="w-4 h-4 text-red-400" />
+                      ) : null}
+                    </span>
+                  )}
+                </div>
               </button>
             );
           })}

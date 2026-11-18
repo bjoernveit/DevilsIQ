@@ -871,7 +871,11 @@ export default function App() {
   const effectiveTab: TabType = activeTab === 'coach' && !isCoach ? 'quiz' : activeTab;
 
   return (
-    <div className="min-h-screen bg-[#09090B] text-zinc-100 flex flex-col font-sans">
+    <div
+      className={`${
+        isQuizActive ? 'h-[100dvh] overflow-hidden' : 'min-h-screen'
+      } bg-[#09090B] text-zinc-100 flex flex-col font-sans`}
+    >
       {/* Minimal 3-Zone Header */}
       <header
         className={`sticky top-0 z-30 ${
@@ -953,7 +957,7 @@ export default function App() {
       <main
         className={`flex-1 ${
           isQuizActive
-            ? 'pb-3 md:pb-8'
+            ? 'min-h-0 flex flex-col overflow-y-auto pb-1 sm:pb-3'
             : isCoach
             ? currentPlayer.isAdmin
               ? 'pb-32 md:pb-16'

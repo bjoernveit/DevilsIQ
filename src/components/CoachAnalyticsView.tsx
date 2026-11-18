@@ -21,8 +21,7 @@ import {
   ChevronRight,
   Copy,
   Check,
-  SlidersHorizontal,
-  Database
+  SlidersHorizontal
 } from 'lucide-react';
 
 interface CoachAnalyticsViewProps {
@@ -42,8 +41,6 @@ interface CoachAnalyticsViewProps {
   onLoadAllAttempts?: () => Promise<void>;
   isLoadingAllAttempts?: boolean;
   allAttemptsLoaded?: boolean;
-  isAdmin?: boolean;
-  onRunAdminMigration?: () => Promise<{ updatedPlayersCount: number; processedAttemptsCount: number }>;
 }
 
 export const CoachAnalyticsView: React.FC<CoachAnalyticsViewProps> = ({
@@ -62,9 +59,7 @@ export const CoachAnalyticsView: React.FC<CoachAnalyticsViewProps> = ({
   onSelectPlayerDetail,
   onLoadAllAttempts,
   isLoadingAllAttempts = false,
-  allAttemptsLoaded = false,
-  isAdmin = false,
-  onRunAdminMigration
+  allAttemptsLoaded = false
 }) => {
   const currentWeek = getWeekKey();
   const activeTeam =
@@ -119,28 +114,7 @@ export const CoachAnalyticsView: React.FC<CoachAnalyticsViewProps> = ({
     : 0;
 
   const [copiedInvite, setCopiedInvite] = useState(false);
-  const [isMigrating, setIsMigrating] = useState(false);
-  const [migrationResult, setMigrationResult] = useState<{
-    updatedPlayersCount: number;
-    processedAttemptsCount: number;
-  } | null>(null);
-  const [migrationError, setMigrationError] = useState<string | null>(null);
   const registrationUrl = getRegistrationUrl();
-
-  const handleAdminMigration = async () => {
-    if (!onRunAdminMigration || isMigrating) return;
-    setIsMigrating(true);
-    setMigrationError(null);
-    setMigrationResult(null);
-    try {
-      const res = await onRunAdminMigration();
-      setMigrationResult(res);
-    } catch (err) {
-      setMigrationError(err instanceof Error ? err.message : 'Migration fehlgeschlagen.');
-    } finally {
-      setIsMigrating(false);
-    }
-  };
 
   const handleCopyInvite = async () => {
     try {
@@ -154,38 +128,6 @@ export const CoachAnalyticsView: React.FC<CoachAnalyticsViewProps> = ({
 
   return (
     <div className="space-y-6">
-      {isAdmin && onRunAdminMigration && (
-        <div className="bg-zinc-900 border border-amber-800/60 rounded-2xl p-4 space-y-3">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <Database className="w-4 h-4 text-amber-400 shrink-0" />
-                <p className="text-xs font-semibold text-white">Admin: Initiale Daten-Migration</p>
-              </div>
-              <p className="text-[11px] text-zinc-400 mt-0.5">
-                Berechnet <code className="text-zinc-300">user_stats</code> (inkl. Wochen- &amp; Gesamtversuche) und <code className="text-zinc-300">user_details</code> für alle Spieler einmalig aus allen vorhandenen Versuchen neu.
-              </p>
-            </div>
-            <button
-              type="button"
-              disabled={isMigrating}
-              onClick={handleAdminMigration}
-              className="px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-xs font-semibold text-black shrink-0 min-h-[38px] transition-colors"
-            >
-              {isMigrating ? 'Migriere Daten...' : 'Stats & Details migrieren'}
-            </button>
-          </div>
-          {migrationResult && (
-            <p className="text-[11px] text-emerald-400 font-medium">
-              Migration abgeschlossen: {migrationResult.updatedPlayersCount} Spieler-Profile aktualisiert ({migrationResult.processedAttemptsCount} Versuche verarbeitet).
-            </p>
-          )}
-          {migrationError && (
-            <p className="text-[11px] text-red-400 font-medium">{migrationError}</p>
-          )}
-        </div>
-      )}
-
       {/* Private Registration Link Card */}
       <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="min-w-0">

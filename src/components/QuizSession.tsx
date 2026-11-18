@@ -196,8 +196,8 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
 
   if (!isStarted) {
     return (
-      <div className="max-w-xl mx-auto px-4 py-8 flex flex-col items-center justify-center min-h-[75vh]">
-        <div className="w-full bg-zinc-900 border border-zinc-800 rounded-2xl p-8 text-center space-y-6">
+      <div className="max-w-xl mx-auto px-4 py-6 flex flex-col items-center justify-center min-h-[75dvh]">
+        <div className="w-full bg-zinc-900 border border-zinc-800 rounded-2xl p-6 sm:p-8 text-center space-y-5 sm:space-y-6">
           <div className="space-y-1">
             <p className="text-xs font-semibold uppercase tracking-wider text-red-400">
               Quiz startet in
@@ -235,9 +235,9 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
   }
 
   return (
-    <div className="max-w-xl mx-auto px-4 py-4 flex flex-col min-h-[82vh] justify-between">
+    <div className="max-w-xl mx-auto px-3 sm:px-4 py-2 sm:py-4 flex flex-col gap-2.5 sm:gap-4">
       {/* Top Quiz HUD */}
-      <div className="space-y-3">
+      <div className="space-y-2 sm:space-y-3">
         <div className="flex items-center justify-between text-xs text-zinc-400">
           <div className="flex items-center gap-2">
             <span className="font-mono font-semibold text-white">
@@ -245,7 +245,7 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
             </span>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3">
             <span
               className={`inline-flex items-center gap-1 font-mono font-semibold tabular-nums px-2 py-0.5 rounded-md ${
                 isUrgent
@@ -259,7 +259,7 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
 
             <button
               onClick={() => setSoundEnabled(!soundEnabled)}
-              className="p-1.5 text-zinc-400 hover:text-white rounded-lg min-h-[36px] min-w-[36px] flex items-center justify-center transition-colors"
+              className="p-1.5 text-zinc-400 hover:text-white rounded-lg min-h-[34px] min-w-[34px] sm:min-h-[36px] sm:min-w-[36px] flex items-center justify-center transition-colors"
               aria-label={soundEnabled ? 'Ton stummschalten' : 'Ton aktivieren'}
             >
               {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
@@ -267,7 +267,7 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
 
             <button
               onClick={onExit}
-              className="text-zinc-400 hover:text-white min-h-[36px] px-1.5 font-medium transition-colors"
+              className="text-zinc-400 hover:text-white min-h-[34px] sm:min-h-[36px] px-1.5 font-medium transition-colors"
             >
               Beenden
             </button>
@@ -284,32 +284,32 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
       </div>
 
       {/* Question Card */}
-      <div className="my-5 bg-zinc-900 border border-zinc-800 rounded-2xl p-5 space-y-4">
-        <div className="space-y-1.5">
+      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-3.5 sm:p-5 space-y-2.5 sm:space-y-4">
+        <div className="space-y-1 sm:space-y-1.5">
           {currentQuestion.tags.length > 0 && (
-            <div className="text-xs text-zinc-400">
+            <div className="text-[11px] sm:text-xs text-zinc-400 leading-tight">
               {currentQuestion.tags.join(' · ')}
             </div>
           )}
-          <h2 className="text-base sm:text-lg font-semibold text-white leading-snug">
+          <h2 className="text-[15px] sm:text-lg font-semibold text-white leading-snug">
             {currentQuestion.scenario || currentQuestion.title}
           </h2>
         </div>
 
         {/* Question Image */}
         {currentQuestion.imageUrl && (
-          <div className="rounded-xl overflow-hidden border border-zinc-800 max-h-60 bg-black">
+          <div className="rounded-xl overflow-hidden border border-zinc-800 max-h-[24vh] sm:max-h-60 bg-black">
             <img
               src={currentQuestion.imageUrl}
               alt={currentQuestion.scenario || currentQuestion.title}
               referrerPolicy="no-referrer"
-              className="w-full h-full object-contain max-h-60"
+              className="w-full h-full object-contain max-h-[24vh] sm:max-h-60"
             />
           </div>
         )}
 
         {/* Answer Options (Text and/or Image) */}
-        <div className={hasVisualOptions ? 'grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1' : 'space-y-2.5 pt-1'}>
+        <div className={hasVisualOptions ? 'grid grid-cols-2 gap-2 sm:gap-2.5 pt-0.5' : 'space-y-2 sm:space-y-2.5 pt-0.5'}>
           {shuffledOptions.map(opt => {
             const isSelected = selectedOptionId === opt.id;
             const isCorrect = opt.isCorrect;
@@ -331,12 +331,12 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
                 key={opt.id}
                 disabled={hasSubmittedAnswer}
                 onClick={() => handleSelectOption(opt)}
-                className={`w-full text-left p-3.5 rounded-xl border transition-colors flex flex-col gap-2.5 min-h-[52px] ${cardStyle}`}
+                className={`w-full text-left p-2.5 sm:p-3.5 rounded-xl border transition-colors flex flex-col justify-center gap-1.5 sm:gap-2.5 min-h-[44px] sm:min-h-[52px] ${cardStyle}`}
               >
                 {(displayText || (hasSubmittedAnswer && (isCorrect || isSelected))) && (
-                  <div className="flex items-start justify-between gap-3 w-full">
+                  <div className="flex items-center justify-between gap-2 sm:gap-3 w-full">
                     {displayText ? (
-                      <span className="flex-1 text-sm font-medium leading-snug">
+                      <span className="flex-1 text-[13px] sm:text-sm font-medium leading-snug">
                         {displayText}
                       </span>
                     ) : (
@@ -344,7 +344,7 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
                     )}
 
                     {hasSubmittedAnswer && (
-                      <span className="shrink-0 mt-0.5">
+                      <span className="shrink-0">
                         {isCorrect ? (
                           <Check className="w-4 h-4 text-emerald-400" />
                         ) : isSelected ? (
@@ -356,12 +356,12 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
                 )}
 
                 {opt.imageUrl && (
-                  <div className="w-full rounded-lg overflow-hidden border border-zinc-800 max-h-36 bg-black">
+                  <div className="w-full rounded-lg overflow-hidden border border-zinc-800 max-h-24 sm:max-h-36 bg-black">
                     <img
                       src={opt.imageUrl}
                       alt={displayText || 'Antwortbild'}
                       referrerPolicy="no-referrer"
-                      className="w-full h-full object-contain max-h-36"
+                      className="w-full h-full object-contain max-h-24 sm:max-h-36"
                     />
                   </div>
                 )}

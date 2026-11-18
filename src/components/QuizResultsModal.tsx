@@ -126,7 +126,7 @@ export const QuizResultsModal: React.FC<QuizResultsModalProps> = ({
 
                 {!ans.isCorrect && q.explanation && (
                   <div className="ml-6 mt-1.5 p-2.5 rounded-lg bg-amber-950/35 border border-amber-700/50 text-amber-100 leading-relaxed">
-                    <span className="font-semibold text-amber-300">Trainer-Hinweis: </span>
+                    <span className="font-semibold text-amber-300">Hinweis: </span>
                     {q.explanation}
                   </div>
                 )}

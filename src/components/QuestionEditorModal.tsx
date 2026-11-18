@@ -542,7 +542,7 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
                 htmlFor="question-coach-note"
                 className="block text-xs font-semibold text-white"
               >
-                Trainer-Hinweis bei falscher Antwort (optional)
+                Hinweis bei falscher Antwort (optional)
               </label>
               <p className="text-[11px] text-zinc-400 mt-0.5">
                 Wird Spielern nur angezeigt, wenn die Frage falsch beantwortet wurde.

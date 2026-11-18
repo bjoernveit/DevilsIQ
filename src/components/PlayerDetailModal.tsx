@@ -705,7 +705,7 @@ export const PlayerDetailModal: React.FC<PlayerDetailModalProps> = ({
 
                             {stat.question.explanation && (viewerIsCoach || !stat.lastIsCorrect) && (
                               <div className="p-2.5 rounded-lg bg-amber-950/30 border border-amber-700/40 text-xs text-amber-100 leading-relaxed">
-                                <span className="font-semibold text-amber-300">Trainer-Hinweis: </span>
+                                <span className="font-semibold text-amber-300">Hinweis: </span>
                                 {stat.question.explanation}
                               </div>
                             )}

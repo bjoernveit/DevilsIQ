@@ -38,7 +38,6 @@ import {
   trackedGetDoc,
   trackedGetDocs,
   subscribeToReadCount,
-  migrateAllUserAggregatesInFirestore,
   finalizeCompletedWeekMedalsIfNeeded,
   fetchAllUserDetailsDeltaOrCold,
   fetchUserStatsDeltaOrCold,
@@ -91,7 +90,6 @@ export default function App() {
   const [attempts, setAttempts] = useState<QuizAttempt[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
   const [quizConfig, setQuizConfig] = useState<QuizConfig>(DEFAULT_QUIZ_CONFIG);
-  const [quizConfigExists, setQuizConfigExists] = useState<boolean>(false);
 
   const [activeTab, setActiveTab] = useState<TabType>('quiz');
   const [coachSubTab, setCoachSubTab] = useState<CoachSubTab>('analytics');
@@ -249,7 +247,6 @@ export default function App() {
       let deletedQuestionIds: string[] = [];
       let loadedMedalsFinalizedThrough: string | undefined;
       const configDocExists = configSnap.exists();
-      setQuizConfigExists(configDocExists);
       if (configDocExists) {
         const data = configSnap.data();
         deletedQuestionIds = Array.isArray(data.deletedQuestionIds)
@@ -330,7 +327,6 @@ export default function App() {
               });
               upsertAggregateEntriesInCache(USER_STATS_CACHE_KEY, res.updatedStats);
             }
-            setQuizConfigExists(true);
             setQuizConfig(prev => ({
               ...prev,
               medalsFinalizedThroughWeek: res.medalsFinalizedThroughWeek
@@ -743,33 +739,16 @@ export default function App() {
     setSelectedPlayerForDetail(null);
   };
 
-  const handleRunAdminMigration = async () => {
-    if (!currentPlayer.isAdmin) {
-      throw new Error('Nur Admins können diese Migration ausführen.');
-    }
-    const result = await migrateAllUserAggregatesInFirestore(players, quizConfigExists);
-    setUserStatsMap(result.statsMap);
-    setUserDetailsMap(result.detailsMap);
-    setAllUserDetailsLoaded(true);
-    setQuizConfigExists(true);
-    setQuizConfig(prev => ({
-      ...prev,
-      medalsFinalizedThroughWeek: result.medalsFinalizedThroughWeek
-    }));
-    upsertAggregateEntriesInCache(USER_STATS_CACHE_KEY, Array.from(result.statsMap.values()));
-    upsertAggregateEntriesInCache(USER_DETAILS_CACHE_KEY, Array.from(result.detailsMap.values()));
-    return {
-      updatedPlayersCount: result.updatedPlayersCount,
-      processedAttemptsCount: result.processedAttemptsCount
-    };
-  };
-
   const effectiveTab: TabType = activeTab === 'coach' && !isCoach ? 'quiz' : activeTab;
 
   return (
     <div className="min-h-screen bg-[#09090B] text-zinc-100 flex flex-col font-sans">
       {/* Minimal 3-Zone Header */}
-      <header className="sticky top-0 z-30 flex items-center justify-between gap-8 px-4 sm:px-6 h-14 bg-black/85 backdrop-blur-md border-b border-zinc-800/90">
+      <header
+        className={`sticky top-0 z-30 ${
+          isQuizActive ? 'hidden md:flex' : 'flex'
+        } items-center justify-between gap-8 px-4 sm:px-6 h-14 bg-black/85 backdrop-blur-md border-b border-zinc-800/90`}
+      >
         <button
           onClick={() => {
             setIsQuizActive(false);
@@ -829,7 +808,19 @@ export default function App() {
       </header>
 
       {/* Main Content */}
-      <main className={`flex-1 ${isCoach ? 'pb-20 md:pb-10' : 'pb-10'}`}>
+      <main
+        className={`flex-1 ${
+          isQuizActive
+            ? 'pb-3 md:pb-8'
+            : isCoach
+            ? currentPlayer.isAdmin
+              ? 'pb-32 md:pb-16'
+              : 'pb-20 md:pb-10'
+            : currentPlayer.isAdmin
+            ? 'pb-16'
+            : 'pb-10'
+        }`}
+      >
         {isQuizActive ? (
           <QuizSession
             questions={activeQuizQuestions}
@@ -954,8 +945,6 @@ export default function App() {
                 onLoadAllAttempts={handleLoadAllAttempts}
                 isLoadingAllAttempts={isLoadingAllAttempts}
                 allAttemptsLoaded={allAttemptsLoaded}
-                isAdmin={Boolean(currentPlayer.isAdmin)}
-                onRunAdminMigration={handleRunAdminMigration}
               />
             ) : coachSubTab === 'teams' ? (
               <CoachTeamsView
@@ -1024,8 +1013,8 @@ export default function App() {
         )}
       </main>
 
-      {/* Mobile Bottom Nav (only shown when Coach tab is available) */}
-      {isCoach && (
+      {/* Mobile Bottom Nav (only shown when Coach tab is available and no quiz is active) */}
+      {isCoach && !isQuizActive && (
         <nav
           aria-label="Mobile Navigation"
           className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-black/90 backdrop-blur-md border-t border-zinc-800 grid grid-cols-2 items-center h-15"
@@ -1156,12 +1145,15 @@ export default function App() {
           setIsProfileOpen(false);
           await signOutUser();
         }}
-        onRunAdminMigration={currentPlayer.isAdmin ? handleRunAdminMigration : undefined}
       />
 
       {/* Admin Document Reads Telemetry Widget (Bottom-Left) */}
-      {currentPlayer.isAdmin && (
-        <div className="fixed bottom-4 left-4 z-50 px-3.5 py-2 bg-black/90 border border-zinc-700/80 rounded-xl text-xs font-mono text-emerald-400 shadow-2xl backdrop-blur-md flex items-center gap-2.5">
+      {currentPlayer.isAdmin && !isQuizActive && (
+        <div
+          className={`fixed ${
+            isCoach ? 'bottom-20 md:bottom-4' : 'bottom-4'
+          } left-4 z-30 pointer-events-none px-3.5 py-2 bg-black/90 border border-zinc-700/80 rounded-xl text-xs font-mono text-emerald-400 shadow-2xl backdrop-blur-md flex items-center gap-2.5`}
+        >
           <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
           <span>
             Firestore Reads: <strong className="text-white tabular-nums font-bold">{documentReadCount}</strong>

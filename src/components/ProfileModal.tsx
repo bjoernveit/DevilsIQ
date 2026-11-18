@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Player } from '../types/basketball';
-import { X, LogOut, Database } from 'lucide-react';
+import { X, LogOut } from 'lucide-react';
 
 interface ProfileModalProps {
   player: Player;
@@ -8,7 +8,6 @@ interface ProfileModalProps {
   onClose: () => void;
   onSaveProfile: (updates: { displayName: string }) => Promise<void>;
   onSignOut: () => Promise<void>;
-  onRunAdminMigration?: () => Promise<{ updatedPlayersCount: number; processedAttemptsCount: number }>;
 }
 
 export const ProfileModal: React.FC<ProfileModalProps> = ({
@@ -16,18 +15,14 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   isOpen,
   onClose,
   onSaveProfile,
-  onSignOut,
-  onRunAdminMigration
+  onSignOut
 }) => {
   const [displayName, setDisplayName] = useState(player.name);
   const [isSaving, setIsSaving] = useState(false);
-  const [isMigrating, setIsMigrating] = useState(false);
-  const [migrationStatus, setMigrationStatus] = useState<string | null>(null);
 
   useEffect(() => {
     if (isOpen) {
       setDisplayName(player.name);
-      setMigrationStatus(null);
     }
   }, [isOpen, player]);
 
@@ -44,20 +39,6 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
       onClose();
     } finally {
       setIsSaving(false);
-    }
-  };
-
-  const handleMigration = async () => {
-    if (!onRunAdminMigration || isMigrating) return;
-    setIsMigrating(true);
-    setMigrationStatus(null);
-    try {
-      const res = await onRunAdminMigration();
-      setMigrationStatus(`${res.updatedPlayersCount} Profile aktualisiert (${res.processedAttemptsCount} Versuche).`);
-    } catch (err) {
-      setMigrationStatus(err instanceof Error ? err.message : 'Migration fehlgeschlagen.');
-    } finally {
-      setIsMigrating(false);
     }
   };
 
@@ -113,23 +94,6 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
               <span>Abmelden</span>
             </button>
           </div>
-
-          {player.isAdmin && onRunAdminMigration && (
-            <div className="pt-3 border-t border-zinc-800 space-y-2">
-              <button
-                type="button"
-                disabled={isMigrating}
-                onClick={handleMigration}
-                className="w-full h-10 rounded-xl border border-amber-700/60 bg-amber-950/40 hover:bg-amber-900/50 disabled:opacity-50 text-amber-200 text-xs font-semibold inline-flex items-center justify-center gap-2 transition-colors"
-              >
-                <Database className="w-3.5 h-3.5" />
-                <span>{isMigrating ? 'Migriere Daten...' : 'Admin: Stats & Details migrieren'}</span>
-              </button>
-              {migrationStatus && (
-                <p className="text-[11px] text-emerald-400 text-center">{migrationStatus}</p>
-              )}
-            </div>
-          )}
         </form>
       </div>
     </div>

@@ -242,20 +242,21 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
     );
   }
 
-  const visualRowClassMap: Record<number, string> = {
-    1: 'grid-rows-1',
-    2: 'grid-rows-2',
-    3: 'grid-rows-3',
-    4: 'grid-rows-4',
-    5: 'grid-rows-5',
-    6: 'grid-rows-6'
+  const visualGridClassMap: Record<number, string> = {
+    1: 'grid-rows-1 md:grid-cols-1 md:grid-rows-1',
+    2: 'grid-rows-2 md:grid-cols-2 md:grid-rows-1',
+    3: 'grid-rows-3 md:grid-cols-2 md:grid-rows-2',
+    4: 'grid-rows-4 md:grid-cols-2 md:grid-rows-2',
+    5: 'grid-rows-5 md:grid-cols-2 md:grid-rows-3',
+    6: 'grid-rows-6 md:grid-cols-2 md:grid-rows-3'
   };
-  const visualRowsClass = visualRowClassMap[shuffledOptions.length] || 'grid-rows-4';
+  const visualGridClass =
+    visualGridClassMap[shuffledOptions.length] || 'grid-rows-4 md:grid-cols-2 md:grid-rows-2';
 
   return (
     <div
       className={`w-full ${
-        hasVisualOptions ? 'max-w-2xl flex-1 min-h-0 h-full' : 'max-w-xl'
+        hasVisualOptions ? 'max-w-2xl md:max-w-3xl flex-1 min-h-0 h-full' : 'max-w-xl'
       } mx-auto px-2.5 sm:px-4 py-2 sm:py-3 flex flex-col gap-2 sm:gap-3`}
     >
       {/* Top Quiz HUD */}
@@ -361,7 +362,7 @@ export const QuizSession: React.FC<QuizSessionProps> = ({
         <div
           className={
             hasVisualOptions
-              ? `flex-1 min-h-0 grid grid-cols-1 ${visualRowsClass} gap-1.5 sm:gap-2.5`
+              ? `flex-1 min-h-0 grid grid-cols-1 ${visualGridClass} gap-1.5 sm:gap-2.5`
               : 'space-y-2 sm:space-y-2.5 pt-0.5'
           }
         >

@@ -1,0 +1,6 @@
+{
+  "name": "HoopIQ - Basketball Playbook & Tactical Quiz",
+  "description": "Gamified basketball tactical playbook quiz with visual court diagrams, weekly leaderboards, coach analytics, and training focus question management.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,469 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Public team member profile without PII (username-based identity).",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "username": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 32,
+          "pattern": "^[a-z0-9_.-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "role": {
+          "type": "string",
+          "enum": ["player", "coach"]
+        },
+        "isAdmin": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "lastRoundStartedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "username", "displayName", "role", "createdAt", "updatedAt"]
+    },
+    "CoachRole": {
+      "title": "CoachRole",
+      "description": "Trusted coach role marker document.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "username": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 32
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "username", "createdAt"]
+    },
+    "Question": {
+      "title": "Question",
+      "description": "Tactical basketball playbook quiz question.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "scenario": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "keyConcept": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "isPriorityFocus": {
+          "type": "boolean"
+        },
+        "tags": {
+          "type": "array"
+        },
+        "teamIds": {
+          "type": "array"
+        },
+        "explanation": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "options": {
+          "type": "array"
+        },
+        "diagram": {
+          "type": "object"
+        },
+        "imageUrl": {
+          "type": "string",
+          "maxLength": 500000
+        },
+        "createdBy": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "title", "scenario", "keyConcept", "isPriorityFocus", "tags", "explanation", "options", "createdBy", "createdAt", "updatedAt"]
+    },
+    "QuizAttempt": {
+      "title": "QuizAttempt",
+      "description": "Completed player quiz session and per-question answers.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "playerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "weekKey": {
+          "type": "string",
+          "maxLength": 16,
+          "pattern": "^[0-9]{4}-W[0-9]{2}$"
+        },
+        "totalScore": {
+          "type": "number"
+        },
+        "correctCount": {
+          "type": "number"
+        },
+        "totalQuestions": {
+          "type": "number"
+        },
+        "totalTimeSeconds": {
+          "type": "number"
+        },
+        "maxStreak": {
+          "type": "number"
+        },
+        "answers": {
+          "type": "array"
+        },
+        "teamId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "passed": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "playerId", "timestamp", "weekKey", "totalScore", "correctCount", "totalQuestions", "totalTimeSeconds", "maxStreak", "answers", "createdAt"]
+    },
+    "TeamMeta": {
+      "title": "TeamMeta",
+      "description": "Shared quiz configuration and initial coach bootstrap state.",
+      "type": "object",
+      "properties": {
+        "coachUid": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "questionCount": {
+          "type": "number"
+        },
+        "timePerQuestionSeconds": {
+          "type": "number"
+        },
+        "prioritizeFocusQuestions": {
+          "type": "boolean"
+        },
+        "ensureDiverseTopics": {
+          "type": "boolean"
+        },
+        "selectedTags": {
+          "type": "array"
+        },
+        "topicLabels": {
+          "type": "array"
+        },
+        "deletedQuestionIds": {
+          "type": "array"
+        },
+        "medalsFinalizedThroughWeek": {
+          "type": "string",
+          "maxLength": 16,
+          "pattern": "^[0-9]{4}-W[0-9]{2}$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "DeletedUser": {
+      "title": "DeletedUser",
+      "description": "Tombstone marker preventing deleted accounts from auto-recreating their profile.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "deletedBy": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "deletedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "deletedBy", "deletedAt"]
+    },
+    "Team": {
+      "title": "Team",
+      "description": "Shared squad with selectable players and team-specific quiz settings.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "playerIds": {
+          "type": "array"
+        },
+        "questionCount": {
+          "type": "number"
+        },
+        "timePerQuestionSeconds": {
+          "type": "number"
+        },
+        "prioritizeFocusQuestions": {
+          "type": "boolean"
+        },
+        "ensureDiverseTopics": {
+          "type": "boolean"
+        },
+        "selectedTags": {
+          "type": "array"
+        },
+        "isDefault": {
+          "type": "boolean"
+        },
+        "createdBy": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "name", "playerIds", "questionCount", "timePerQuestionSeconds", "prioritizeFocusQuestions", "ensureDiverseTopics", "createdBy", "createdAt", "updatedAt"]
+    },
+    "UserStats": {
+      "title": "UserStats",
+      "description": "Aggregated quiz performance stats per player.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "currentStreak": {
+          "type": "integer"
+        },
+        "bestStreak": {
+          "type": "integer"
+        },
+        "totalAttemptsAllTime": {
+          "type": "integer"
+        },
+        "attemptsThisWeek": {
+          "type": "integer"
+        },
+        "currentWeekKey": {
+          "type": "string",
+          "maxLength": 16,
+          "pattern": "^[0-9]{4}-W[0-9]{2}$"
+        },
+        "bestScoreThisWeek": {
+          "type": "number"
+        },
+        "bestScoreAllTime": {
+          "type": "number"
+        },
+        "pastGold": {
+          "type": "integer"
+        },
+        "pastSilver": {
+          "type": "integer"
+        },
+        "pastBronze": {
+          "type": "integer"
+        },
+        "medalsThroughWeek": {
+          "type": "string",
+          "maxLength": 16,
+          "pattern": "^[0-9]{4}-W[0-9]{2}$"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["userId", "currentStreak", "bestStreak", "totalAttemptsAllTime", "bestScoreThisWeek", "updatedAt"]
+    },
+    "UserDetails": {
+      "title": "UserDetails",
+      "description": "Precalculated player detail analytics, weekly trends, per-question stats, and recent attempts summary.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "totalAttempts": {
+          "type": "integer"
+        },
+        "passedAttempts": {
+          "type": "integer"
+        },
+        "bestTimeAllTime": {
+          "type": "number"
+        },
+        "averagePassedTime": {
+          "type": "number"
+        },
+        "overallAvgQuestionTime": {
+          "type": "number"
+        },
+        "currentStreak": {
+          "type": "integer"
+        },
+        "bestStreak": {
+          "type": "integer"
+        },
+        "currentWeekKey": {
+          "type": "string",
+          "maxLength": 16,
+          "pattern": "^[0-9]{4}-W[0-9]{2}$"
+        },
+        "thisWeekPassed": {
+          "type": "boolean"
+        },
+        "weeklyTrends": {
+          "type": "array"
+        },
+        "questionStats": {
+          "type": "array"
+        },
+        "recentAttempts": {
+          "type": "array"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "userId",
+        "totalAttempts",
+        "passedAttempts",
+        "bestTimeAllTime",
+        "averagePassedTime",
+        "overallAvgQuestionTime",
+        "currentStreak",
+        "bestStreak",
+        "currentWeekKey",
+        "thisWeekPassed",
+        "weeklyTrends",
+        "questionStats",
+        "recentAttempts",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Public roster profile for each registered player or coach."
+    },
+    "/coaches/{userId}": {
+      "schema": { "$ref": "#/entities/CoachRole" },
+      "description": "Trusted role lookup documents for coaches."
+    },
+    "/questions/{questionId}": {
+      "schema": { "$ref": "#/entities/Question" },
+      "description": "Shared tactical playbook quiz questions."
+    },
+    "/attempts/{attemptId}": {
+      "schema": { "$ref": "#/entities/QuizAttempt" },
+      "description": "Completed quiz attempts for leaderboard and coach analytics."
+    },
+    "/team_meta/{metaId}": {
+      "schema": { "$ref": "#/entities/TeamMeta" },
+      "description": "Team-wide quiz configuration (quiz_config) and bootstrap lock (bootstrap)."
+    },
+    "/deleted_users/{userId}": {
+      "schema": { "$ref": "#/entities/DeletedUser" },
+      "description": "Tombstone documents for users removed by a coach."
+    },
+    "/teams/{teamId}": {
+      "schema": { "$ref": "#/entities/Team" },
+      "description": "Shared teams managed by coaches with per-team player rosters and quiz settings."
+    },
+    "/user_stats/{userId}": {
+      "schema": { "$ref": "#/entities/UserStats" },
+      "description": "Aggregated quiz performance stats for each player."
+    },
+    "/user_details/{userId}": {
+      "schema": { "$ref": "#/entities/UserDetails" },
+      "description": "Precalculated player detail modal data stored in a single document per user."
+    }
+  }
+}

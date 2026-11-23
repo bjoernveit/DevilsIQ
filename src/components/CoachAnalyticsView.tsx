@@ -1,0 +1,501 @@
+import React, { useState } from 'react';
+import { Player, Question, QuizAttempt, Team, UserStats, UserDetails } from '../types/basketball';
+import {
+  calculateTacticalGaps,
+  calculateTacticalGapsFromQuestionStats,
+  aggregateQuestionStatsFromUserDetails,
+  calculateWeeklyLeaderboard,
+  calculateWeeklyTrends,
+  filterQuestionsForTeam,
+  getWeekKey,
+  isPlayerOnline,
+  PlayerMedals
+} from '../utils/quizEngine';
+import { getRegistrationUrl } from '../lib/firebase';
+import { PlayerLabel } from './PlayerLabel';
+import {
+  Star,
+  ArrowUpRight,
+  ArrowDownRight,
+  Minus,
+  ChevronRight,
+  Copy,
+  Check,
+  SlidersHorizontal,
+  Award
+} from 'lucide-react';
+
+interface CoachAnalyticsViewProps {
+  players: Player[];
+  questions: Question[];
+  attempts: QuizAttempt[];
+  teams: Team[];
+  medalsByPlayer?: Map<string, PlayerMedals>;
+  userStatsMap?: Map<string, UserStats>;
+  userDetailsMap?: Map<string, UserDetails>;
+  nowMs?: number;
+  selectedTeamId: string;
+  onSelectTeamId: (teamId: string) => void;
+  onOpenTeamConfig?: (team: Team) => void;
+  onTogglePriorityFocus: (questionId: string) => void;
+  onSelectPlayerDetail: (player: Player) => void;
+  onLoadAllAttempts?: () => Promise<void>;
+  isLoadingAllAttempts?: boolean;
+  allAttemptsLoaded?: boolean;
+  onCleanupMedals?: () => Promise<{ updatedPlayersCount: number; processedAttemptsCount: number }>;
+}
+
+export const CoachAnalyticsView: React.FC<CoachAnalyticsViewProps> = ({
+  players,
+  questions,
+  attempts,
+  teams,
+  medalsByPlayer,
+  userStatsMap,
+  userDetailsMap,
+  nowMs = Date.now(),
+  selectedTeamId,
+  onSelectTeamId,
+  onOpenTeamConfig,
+  onTogglePriorityFocus,
+  onSelectPlayerDetail,
+  onLoadAllAttempts,
+  isLoadingAllAttempts = false,
+  allAttemptsLoaded = false,
+  onCleanupMedals
+}) => {
+  const currentWeek = getWeekKey();
+  const activeTeam =
+    selectedTeamId !== 'all' ? teams.find(t => t.id === selectedTeamId) || null : null;
+
+  const scopedPlayers = activeTeam
+    ? players.filter(p => activeTeam.playerIds.includes(p.id))
+    : players;
+  const scopedQuestions = activeTeam
+    ? filterQuestionsForTeam(questions, activeTeam.id)
+    : questions;
+  const teamPlayerIdSet = new Set(scopedPlayers.map(p => p.id));
+  const scopedAttempts = activeTeam
+    ? attempts.filter(
+        a =>
+          teamPlayerIdSet.has(a.playerId) &&
+          a.teamId === activeTeam.id
+      )
+    : attempts;
+
+  const usePrecalcDetails = scopedAttempts.length === 0 && Boolean(userDetailsMap && userDetailsMap.size > 0);
+  const aggregatedQStats = usePrecalcDetails
+    ? aggregateQuestionStatsFromUserDetails(Array.from(userDetailsMap!.values()), {
+        teamPlayerIds: activeTeam ? teamPlayerIdSet : null
+      })
+    : null;
+
+  const gaps = aggregatedQStats
+    ? calculateTacticalGapsFromQuestionStats(scopedQuestions, Array.from(aggregatedQStats.values()))
+    : calculateTacticalGaps(scopedQuestions, scopedAttempts);
+  const leaderboard = calculateWeeklyLeaderboard(scopedPlayers, scopedAttempts, currentWeek, userStatsMap);
+  const weeklyTrends = calculateWeeklyTrends(scopedAttempts);
+
+  const completedCount = leaderboard.filter(l => l.hasCompletedThisWeek).length;
+  const totalAttemptsDisplay =
+    scopedAttempts.length > 0
+      ? scopedAttempts.length
+      : leaderboard.reduce((sum, item) => sum + item.totalAttemptsAllTime, 0);
+  const totalAnswers = scopedAttempts.flatMap(a => a.answers);
+  const overallAccuracy = aggregatedQStats
+    ? (() => {
+        let total = 0;
+        let correct = 0;
+        aggregatedQStats.forEach(s => {
+          total += s.total;
+          correct += s.correct;
+        });
+        return total > 0 ? Math.round((correct / total) * 100) : 0;
+      })()
+    : totalAnswers.length > 0
+    ? Math.round((totalAnswers.filter(a => a.isCorrect).length / totalAnswers.length) * 100)
+    : 0;
+
+  const [copiedInvite, setCopiedInvite] = useState(false);
+  const [isCleaningMedals, setIsCleaningMedals] = useState(false);
+  const [cleanupNotice, setCleanupNotice] = useState<{
+    type: 'success' | 'error';
+    message: string;
+  } | null>(null);
+  const registrationUrl = getRegistrationUrl();
+
+  const handleCopyInvite = async () => {
+    if (!registrationUrl) return;
+    try {
+      await navigator.clipboard.writeText(registrationUrl);
+      setCopiedInvite(true);
+      setTimeout(() => setCopiedInvite(false), 2000);
+    } catch {
+      // Clipboard fallback ignored
+    }
+  };
+
+  const handleCleanupMedalsClick = async () => {
+    if (!onCleanupMedals || isCleaningMedals) return;
+    setIsCleaningMedals(true);
+    setCleanupNotice(null);
+    try {
+      const res = await onCleanupMedals();
+      setCleanupNotice({
+        type: 'success',
+        message: `Bereinigt: ${res.updatedPlayersCount} Spieler anhand von ${res.processedAttemptsCount} ${
+          res.processedAttemptsCount === 1 ? 'Versuch' : 'Versuchen'
+        } neu berechnet.`
+      });
+    } catch {
+      setCleanupNotice({
+        type: 'error',
+        message: 'Medaillen konnten nicht bereinigt werden. Bitte erneut versuchen.'
+      });
+    } finally {
+      setIsCleaningMedals(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Private Registration Link Card */}
+      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-xs font-semibold text-white">Registrierungslink für Spieler</p>
+          <p className="text-[11px] text-zinc-400 font-mono truncate mt-0.5">
+            {registrationUrl || 'Kein VITE_REGISTRATION_TOKEN in den Build-Secrets konfiguriert.'}
+          </p>
+        </div>
+        <button
+          onClick={handleCopyInvite}
+          disabled={!registrationUrl}
+          className="px-3.5 py-2 rounded-xl border border-zinc-700 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed text-xs font-semibold text-white inline-flex items-center justify-center gap-1.5 shrink-0 min-h-[38px] transition-colors"
+        >
+          {copiedInvite ? (
+            <>
+              <Check className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Kopiert</span>
+            </>
+          ) : (
+            <>
+              <Copy className="w-3.5 h-3.5 text-zinc-300" />
+              <span>Link kopieren</span>
+            </>
+          )}
+        </button>
+      </div>
+
+      {onCleanupMedals && (
+        <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 space-y-2.5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-xs font-semibold text-white">Medaillen & Vorberechnung bereinigen</p>
+              <p className="text-[11px] text-zinc-400 mt-0.5">
+                Berechnet alle Medaillen und Bestzeiten aus den abgeschlossenen Versuchen komplett neu.
+              </p>
+            </div>
+            <button
+              type="button"
+              disabled={isCleaningMedals}
+              onClick={handleCleanupMedalsClick}
+              className="px-3.5 py-2 rounded-xl border border-amber-500/30 bg-amber-500/10 hover:bg-amber-500/20 disabled:opacity-50 disabled:cursor-not-allowed text-xs font-semibold text-amber-300 inline-flex items-center justify-center gap-1.5 shrink-0 min-h-[38px] transition-colors"
+            >
+              <Award className="w-3.5 h-3.5 shrink-0" />
+              <span>{isCleaningMedals ? 'Bereinige...' : 'Medaillen bereinigen'}</span>
+            </button>
+          </div>
+          {cleanupNotice && (
+            <p
+              className={`text-[11px] ${
+                cleanupNotice.type === 'success' ? 'text-emerald-400' : 'text-red-400'
+              }`}
+            >
+              {cleanupNotice.message}
+            </p>
+          )}
+        </div>
+      )}
+
+      {!allAttemptsLoaded && onLoadAllAttempts && (
+        <div className="bg-zinc-900/80 border border-zinc-800 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-xs font-semibold text-zinc-200">Detail-Auswertung noch nicht geladen ({totalAttemptsDisplay} {totalAttemptsDisplay === 1 ? 'Versuch' : 'Versuche'} erfasst)</p>
+            <p className="text-[11px] text-zinc-400 mt-0.5">Zur Schonung der Firestore-Reads werden Themen-Lücken & Verlauf erst bei Bedarf geladen.</p>
+          </div>
+          <button
+            type="button"
+            disabled={isLoadingAllAttempts}
+            onClick={onLoadAllAttempts}
+            className="px-3.5 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-xs font-semibold text-zinc-200 shrink-0 min-h-[38px] transition-colors"
+          >
+            {isLoadingAllAttempts ? 'Lade Daten...' : 'Alle historischen Daten laden'}
+          </button>
+        </div>
+      )}
+      {teams.length > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+            <button
+              type="button"
+              onClick={() => onSelectTeamId('all')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors min-h-[34px] ${
+                !activeTeam
+                  ? 'bg-red-700 text-white'
+                  : 'bg-zinc-900 border border-zinc-800 text-zinc-300 hover:bg-zinc-800'
+              }`}
+            >
+              Alle Teams ({players.length})
+            </button>
+            {teams.map(team => (
+              <button
+                key={team.id}
+                type="button"
+                onClick={() => onSelectTeamId(team.id)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors min-h-[34px] ${
+                  activeTeam?.id === team.id
+                    ? 'bg-red-700 text-white'
+                    : 'bg-zinc-900 border border-zinc-800 text-zinc-300 hover:bg-zinc-800'
+                }`}
+              >
+                {team.name} ({team.playerIds.length})
+              </button>
+            ))}
+          </div>
+
+          {activeTeam && onOpenTeamConfig && (
+            <button
+              type="button"
+              onClick={() => onOpenTeamConfig(activeTeam)}
+              className="px-3 py-1.5 rounded-lg border border-zinc-700 bg-zinc-900 hover:bg-zinc-800 text-xs font-medium text-zinc-200 inline-flex items-center gap-1.5 min-h-[34px] whitespace-nowrap transition-colors"
+            >
+              <SlidersHorizontal className="w-3.5 h-3.5" />
+              <span>Team-Einstellungen</span>
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* 3 Simple Top Metrics */}
+      <div className="grid grid-cols-3 gap-3">
+        <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4">
+          <div className="text-xs text-zinc-400">Diese Woche</div>
+          <div className="text-xl sm:text-2xl font-bold font-mono tabular-nums text-white mt-1">
+            {completedCount}/{scopedPlayers.length}
+          </div>
+          <div className="text-[11px] text-zinc-500 mt-0.5">fertig</div>
+        </div>
+
+        <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4">
+          <div className="text-xs text-zinc-400">Team-Quote</div>
+          <div className="text-xl sm:text-2xl font-bold font-mono tabular-nums text-white mt-1">
+            {overallAccuracy}%
+          </div>
+          <div className="text-[11px] text-zinc-500 mt-0.5">Gesamtschnitt</div>
+        </div>
+
+        <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4">
+          <div className="text-xs text-zinc-400">Versuche gesamt</div>
+          <div className="text-xl sm:text-2xl font-bold font-mono tabular-nums text-white mt-1">
+            {totalAttemptsDisplay}
+          </div>
+          <div className="text-[11px] text-zinc-500 mt-0.5">Durchgänge</div>
+        </div>
+      </div>
+
+      {/* Team Improvement Trend Over Time */}
+      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-sm font-bold text-white">Team-Entwicklung</h2>
+            <p className="text-xs text-zinc-400">Durchschnittliche Trefferquote & Zeit pro Woche</p>
+          </div>
+        </div>
+
+        {weeklyTrends.length === 0 ? (
+          <div className="text-xs text-zinc-400 py-4">Noch nicht genügend Wochendaten vorhanden.</div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {weeklyTrends.map((wk, idx) => {
+              const prev = idx > 0 ? weeklyTrends[idx - 1] : null;
+              const diffAcc = prev ? wk.averageAccuracy - prev.averageAccuracy : 0;
+
+              return (
+                <div key={wk.weekKey} className="p-3.5 rounded-xl bg-zinc-950 border border-zinc-800 space-y-1.5">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-mono font-semibold text-zinc-200">
+                      {wk.weekKey === currentWeek ? 'Diese Woche' : wk.weekKey}
+                    </span>
+                    <span className="text-zinc-500 tabular-nums">{wk.attemptCount} {wk.attemptCount === 1 ? 'Versuch' : 'Versuche'}</span>
+                  </div>
+                  <div className="flex items-baseline justify-between">
+                    <span className="text-lg font-bold font-mono tabular-nums text-white">
+                      {wk.averageAccuracy}%
+                    </span>
+                    {prev && (
+                      <span className={`text-xs font-mono font-medium ${diffAcc >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                        {diffAcc >= 0 ? `+${diffAcc}%` : `${diffAcc}%`}
+                      </span>
+                    )}
+                  </div>
+                  <div className="w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-red-600 rounded-full"
+                      style={{ width: `${wk.averageAccuracy}%` }}
+                    />
+                  </div>
+                  <div className="text-[11px] text-zinc-400 font-mono tabular-nums">
+                    {wk.averageScore > 0 ? `Ø Zeit: ${wk.averageScore.toFixed(1)}s` : 'Kein Durchgang bestanden'}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Tactical Knowledge Gaps */}
+      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 space-y-4">
+        <div>
+          <h2 className="text-sm font-bold text-white">Taktische Wissenslücken</h2>
+          <p className="text-xs text-zinc-400">Sortiert von der niedrigsten zur höchsten Trefferquote. Markiere Fragen mit dem Stern als Fokus.</p>
+        </div>
+
+        <div className="divide-y divide-zinc-800/80">
+          {gaps.map(gap => {
+            const relatedQuestions = scopedQuestions.filter(q => q.tags.includes(gap.tag));
+            const isLow = gap.totalAnswered > 0 && gap.accuracyPercentage < 65;
+
+            return (
+              <div key={gap.tag} className="py-3.5 first:pt-1 last:pb-1 space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="font-semibold text-white">{gap.tag}</span>
+                  <div className="flex items-center gap-3 font-mono text-xs tabular-nums">
+                    <span className="text-zinc-400">
+                      {gap.correctAnswered}/{gap.totalAnswered}
+                    </span>
+                    <span className={`font-bold w-11 text-right ${isLow ? 'text-red-400' : 'text-white'}`}>
+                      {gap.totalAnswered > 0 ? `${gap.accuracyPercentage}%` : '—'}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full rounded-full ${isLow ? 'bg-red-600' : 'bg-zinc-300'}`}
+                    style={{ width: `${gap.totalAnswered > 0 ? Math.max(4, gap.accuracyPercentage) : 0}%` }}
+                  />
+                </div>
+
+                {relatedQuestions.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {relatedQuestions.map(q => (
+                      <button
+                        key={q.id}
+                        onClick={() => onTogglePriorityFocus(q.id)}
+                        className={`inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg border transition-colors min-h-[30px] ${
+                          q.isPriorityFocus
+                            ? 'bg-red-950/70 border-red-700/70 text-red-200 font-medium'
+                            : 'bg-zinc-950 border-zinc-800 text-zinc-300 hover:border-zinc-700'
+                        }`}
+                      >
+                        <Star className={`w-3 h-3 ${q.isPriorityFocus ? 'fill-red-500 text-red-500' : 'text-zinc-500'}`} />
+                        <span className="truncate max-w-[180px]">{q.scenario || q.title}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Player Tracking & Attempts */}
+      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 space-y-3">
+        <div>
+          <h2 className="text-sm font-bold text-white">Spielerfortschritt & Versuche</h2>
+          <p className="text-xs text-zinc-400">Tippe auf einen Spieler für Details, Rolle oder zum Löschen.</p>
+        </div>
+
+        <div className="divide-y divide-zinc-800/80">
+          {leaderboard.length === 0 ? (
+            <div className="py-6 text-center text-xs text-zinc-400">
+              {activeTeam
+                ? `Noch keine Spieler im Team „${activeTeam.name}“ ausgewählt.`
+                : 'Noch keine Spieler registriert.'}
+            </div>
+          ) : (
+            leaderboard.map(summary => {
+              const playerPassedAttempts = scopedAttempts
+                .filter(
+                  a =>
+                    a.playerId === summary.player.id &&
+                    (a.passed === true || a.correctCount === a.totalQuestions)
+                )
+                .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+              let trend: 'up' | 'down' | 'flat' = 'flat';
+              if (playerPassedAttempts.length >= 2) {
+                const last = playerPassedAttempts[playerPassedAttempts.length - 1].totalTimeSeconds;
+                const prev = playerPassedAttempts[playerPassedAttempts.length - 2].totalTimeSeconds;
+                if (last < prev - 2) trend = 'up'; // faster/better
+                else if (last > prev + 2) trend = 'down'; // slower/worse
+              }
+
+              return (
+                <button
+                  key={summary.player.id}
+                  onClick={() => onSelectPlayerDetail(summary.player)}
+                  className="w-full flex items-center justify-between py-3 text-left hover:bg-zinc-800/50 transition-colors min-h-[56px]"
+                >
+                  <div>
+                    <div className="text-sm font-semibold text-white flex items-center gap-2">
+                      <PlayerLabel
+                        name={summary.player.name}
+                        medals={medalsByPlayer?.get(summary.player.id)}
+                        isOnline={isPlayerOnline(summary.player.lastRoundStartedAt, nowMs)}
+                      />
+                      {summary.player.role === 'coach' && (
+                        <span className="text-red-400 font-medium text-[11px]">Trainer</span>
+                      )}
+                    </div>
+                    <div className="text-xs text-zinc-400 tabular-nums mt-0.5">
+                      {summary.totalAttemptsAllTime} {summary.totalAttemptsAllTime === 1 ? 'Versuch' : 'Versuche'} gesamt · {summary.attemptsThisWeek} diese Woche
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3 shrink-0">
+                    <div className="text-right">
+                      <div className="flex items-center justify-end gap-1 text-xs font-medium">
+                        {trend === 'up' && (
+                          <span className="text-emerald-400 inline-flex items-center gap-0.5">
+                            <ArrowUpRight className="w-3.5 h-3.5" /> Steigend
+                          </span>
+                        )}
+                        {trend === 'down' && (
+                          <span className="text-red-400 inline-flex items-center gap-0.5">
+                            <ArrowDownRight className="w-3.5 h-3.5" /> Fallend
+                          </span>
+                        )}
+                        {trend === 'flat' && (
+                          <span className="text-zinc-500 inline-flex items-center gap-0.5">
+                            <Minus className="w-3.5 h-3.5" /> Konstant
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[11px] text-zinc-400 mt-0.5">
+                        {summary.hasCompletedThisWeek ? 'Fertig' : 'Offen'}
+                      </div>
+                    </div>
+                    <ChevronRight className="w-4 h-4 text-zinc-500" />
+                  </div>
+                </button>
+              );
+            })
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
